@@ -1,0 +1,8 @@
+{"question":"How do I create an order and which fulfillment_type values are accepted?","must_cite_doc":"orders-api","must_contain":["POST /v1/orders","fulfillment_type"]}
+{"question":"What should I do if ACME_ORDER_CONFLICT is returned?","must_cite_doc":"orders-api","must_contain":["ACME_ORDER_CONFLICT","external_reference"]}
+{"question":"How long are physical items returnable?","must_cite_doc":"returns-and-refunds","must_contain":["30 days","return"]}
+{"question":"Which events are sent when a return changes?","must_cite_doc":"returns-and-refunds","must_contain":["return.created","return.approved"]}
+{"question":"What is the difference between sandbox and production?","must_cite_doc":"getting-started","must_contain":["sandbox","production"]}
+{"question":"What scopes are commonly used for API tokens?","must_cite_doc":"getting-started","must_contain":["catalog:read","orders:write"]}
+{"question":"Which endpoint submits a refund?","must_cite_doc":"returns-and-refunds","must_contain":["POST /v1/refunds","return_id"]}
+{"question":"How should webhook consumers avoid duplicate handling?","must_cite_doc":"getting-started","must_contain":["event_id","24 hours"]}
