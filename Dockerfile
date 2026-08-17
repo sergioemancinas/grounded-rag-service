@@ -10,7 +10,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Build the index at image build time so the container answers immediately
+# with no volume, no credentials, and no network.
 RUN python scripts/build_index.py --docs data/sample_docs --out data/index.jsonl
+
+RUN useradd --create-home --uid 10001 citespine \
+    && chown -R citespine:citespine /app
+USER citespine
 
 EXPOSE 8000
 

@@ -10,13 +10,9 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.cache import SemanticCache
 from app.config import Settings
-from app.pipeline import PipelineDeps, answer_question
-from app.providers import get_embedder, get_generator
-from app.rerank import get_reranker
-from app.resilience import CircuitBreaker
-from app.retrieval import Retriever
+from app.deps import build_deps
+from app.pipeline import answer_question
 
 
 def parse_args() -> argparse.Namespace:
@@ -35,21 +31,10 @@ def read_golden(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def make_deps(settings: Settings) -> PipelineDeps:
-    return PipelineDeps(
-        embedder=get_embedder(settings),
-        generator=get_generator(settings),
-        retriever=Retriever(settings.index_path, settings),
-        reranker=get_reranker(settings),
-        cache=SemanticCache(enabled=False),
-        breaker=CircuitBreaker(),
-    )
-
-
 def main() -> None:
     args = parse_args()
-    settings = Settings(embedding_provider="local", generation_provider="local")
-    deps = make_deps(settings)
+    settings = Settings(embedding_provider="local", generation_provider="local", cache_enabled=False)
+    deps = build_deps(settings)
     rows = read_golden(args.golden)
     hit_count = 0
     contains_count = 0

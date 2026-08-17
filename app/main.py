@@ -1,197 +1,228 @@
+"""Channel-agnostic core service.
+
+Exposes the grounded pipeline as versioned JSON over HTTP:
+
+- ``GET  /health``       liveness plus the resolved provider names
+- ``POST /v1/ask``       full grounded pipeline, cited markdown answer
+- ``POST /v1/search``    retrieval only, raw corpus chunks
+- ``POST /v1/feedback``  verdict recording for any channel
+
+Dependencies are built once in the lifespan context and stored on
+``app.state``; routes read them through the thin accessors in app/deps.py.
+Optional static bearer auth on ``/v1/*`` is enabled by setting
+``API_AUTH_TOKEN``. Platform signature verification (Slack HMAC and
+friends) belongs exclusively to channel adapters, never to the core.
+"""
+
 from __future__ import annotations
 
-import json
-import time
-from collections import OrderedDict
-from typing import Any
-from urllib.parse import parse_qs
+import hmac
+import logging
+import uuid
 
-import httpx
-from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from typing import AsyncIterator, Callable
+
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
 
 from app import __version__
-from app.cache import SemanticCache
+from app.api_models import (
+    AskFn,
+    AskRequest,
+    AskResponse,
+    FeedbackRequest,
+    GroundingInfo,
+    SearchRequest,
+    SearchResponse,
+    SearchResult,
+    SourceRef,
+)
+from app.channels.base import FeedbackFn
 from app.config import Settings
+from app.deps import build_deps, get_deps, get_settings, provider_names
 from app.feedback import FeedbackStore
 from app.pipeline import PipelineDeps, answer_question
-from app.providers import get_embedder, get_generator
-from app.rerank import get_reranker
-from app.resilience import CircuitBreaker
-from app.retrieval import Retriever
-from app.slack_io import render_answer_blocks, verify_slack_signature
+
+logger = logging.getLogger("citespine")
+
+McpRunner = Callable[[], AbstractAsyncContextManager[None]]
+"""Factory for the MCP session-manager context, entered by the lifespan."""
 
 
-class SeenEventSet:
-    def __init__(self, ttl_seconds: float = 300.0) -> None:
-        self.ttl_seconds = ttl_seconds
-        self._items: OrderedDict[str, float] = OrderedDict()
+def mount_channels(app: FastAPI, ask: AskFn, settings: Settings, feedback: FeedbackFn) -> None:
+    """Mount in-process channel adapters (app/channels/*).
 
-    def add(self, event_id: str) -> bool:
-        now = time.time()
-        self._evict(now)
-        if event_id in self._items:
-            return False
-        self._items[event_id] = now
-        return True
+    Each adapter is optional and mounts only when its credentials are
+    configured, so the core runs standalone by default. Adapters consume the
+    core solely through the injected ``ask`` and ``feedback`` callables; add
+    your own with one ``include_router`` line here.
+    """
+    if settings.slack_signing_secret:
+        from app.channels import slack
 
-    def _evict(self, now: float) -> None:
-        expired = [key for key, seen_at in self._items.items() if now - seen_at > self.ttl_seconds]
-        for key in expired:
-            self._items.pop(key, None)
+        app.include_router(slack.create_router(ask, settings, feedback))
+        logger.info("slack adapter: mounted at /slack/events")
+    else:
+        logger.info("slack adapter: not mounted, SLACK_SIGNING_SECRET unset")
 
 
-def build_deps(settings: Settings) -> PipelineDeps:
-    retriever = Retriever(settings.index_path, settings)
-    return PipelineDeps(
-        embedder=get_embedder(settings),
-        generator=get_generator(settings),
-        retriever=retriever,
-        reranker=get_reranker(settings),
-        cache=SemanticCache(
-            enabled=settings.cache_enabled,
-            similarity_threshold=settings.cache_similarity,
-            ttl_seconds=settings.cache_ttl_seconds,
-        ),
-        breaker=CircuitBreaker(),
+def mount_mcp(app: FastAPI, settings: Settings, deps_provider: Callable[[], PipelineDeps]) -> McpRunner | None:
+    """Mount the MCP transport at /mcp, returning its session-manager runner.
+
+    Returns None when the optional ``mcp`` package is not installed, which is
+    the default for the offline stack. The returned runner must be entered by
+    the host lifespan or the first MCP request fails.
+    """
+    from app.mcp_server import mount as mount_mcp_transport
+
+    return mount_mcp_transport(app, settings, deps_provider)
+
+
+def run_ask(payload: AskRequest, settings: Settings, deps: PipelineDeps) -> AskResponse:
+    """Execute the grounded pipeline for one AskRequest."""
+    result = answer_question(payload.question, history=payload.history, settings=settings, deps=deps)
+    sources = [
+        SourceRef(
+            id=scored.chunk.id,
+            title=scored.chunk.title,
+            url=scored.chunk.url,
+            heading_path=scored.chunk.heading_path,
+            score=scored.score,
+        )
+        for scored in result.chunks
+    ]
+    grounding = None
+    if result.grounding is not None:
+        grounding = GroundingInfo(
+            score=result.grounding.score,
+            passed=result.grounding.score >= settings.grounding_min_score,
+        )
+    return AskResponse(
+        answer=result.answer,
+        citations=result.citations,
+        sources=sources,
+        grounding=grounding,
+        intent=result.route.intent,
+        cached=result.cached,
+        followups=result.followups,
+        timings=result.timings,
+        request_id=str(uuid.uuid4()),
     )
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
-    app_settings = settings or Settings()
-    app_settings.validate_credentials()
-    deps = build_deps(app_settings)
-    feedback = FeedbackStore(app_settings.feedback_db_path)
-    seen_events = SeenEventSet()
+def require_api_auth(request: Request) -> None:
+    """Optional static bearer check on /v1/*; disabled when API_AUTH_TOKEN is empty."""
+    settings: Settings = request.app.state.settings
+    if not settings.api_auth_token:
+        return
+    provided = request.headers.get("authorization", "")
+    expected = f"Bearer {settings.api_auth_token}"
+    if not hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8")):
+        raise HTTPException(status_code=401, detail="invalid or missing bearer token")
 
-    application = FastAPI(title="slack-rag-skeleton", version=__version__)
+
+api = APIRouter(prefix="/v1", dependencies=[Depends(require_api_auth)])
+
+
+@api.post("/ask", response_model=AskResponse)
+def ask_route(
+    payload: AskRequest,
+    settings: Settings = Depends(get_settings),
+    deps: PipelineDeps = Depends(get_deps),
+) -> AskResponse:
+    """Run the full grounded pipeline and return a cited markdown answer."""
+    return run_ask(payload, settings, deps)
+
+
+@api.post("/search", response_model=SearchResponse)
+def search_route(
+    payload: SearchRequest,
+    deps: PipelineDeps = Depends(get_deps),
+) -> SearchResponse:
+    """Hybrid retrieval over the corpus index; no generation, raw chunks."""
+    embedding = deps.embedder.embed([payload.query])[0]
+    results = deps.retriever.retrieve(payload.query, embedding, payload.top_k)
+    return SearchResponse(
+        results=[
+            SearchResult(
+                id=scored.chunk.id,
+                text=scored.chunk.text,
+                title=scored.chunk.title,
+                url=scored.chunk.url,
+                heading_path=scored.chunk.heading_path,
+                score=scored.score,
+            )
+            for scored in results[: payload.top_k]
+        ]
+    )
+
+
+@api.post("/feedback", status_code=204)
+def feedback_route(payload: FeedbackRequest, request: Request) -> Response:
+    """Record an up/down verdict against a previously returned request_id."""
+    record_feedback(request.app, payload)
+    return Response(status_code=204)
+
+
+def record_feedback(application: FastAPI, payload: FeedbackRequest) -> None:
+    """Persist one verdict; shared by the HTTP route and in-process adapters."""
+    store: FeedbackStore = application.state.feedback
+    store.record(
+        user_id=payload.user_id or "api",
+        question=payload.comment or "",
+        answer_ts=payload.request_id,
+        verdict=payload.verdict,
+    )
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+    """Build dependencies at startup (the index loads here, not at import)."""
+    settings: Settings = application.state.settings
+    application.state.deps = build_deps(settings)
+    application.state.feedback = FeedbackStore(settings.feedback_db_path)
+    runner: McpRunner | None = getattr(application.state, "mcp_runner", None)
+    if runner is None:
+        yield
+        return
+    # The MCP transport requires its session manager to be running for the
+    # lifetime of the host application; without this the first request fails.
+    async with runner():
+        yield
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    """Build the FastAPI application around the given (or env-derived) settings."""
+    app_settings = settings or Settings()
+    application = FastAPI(title="citespine", version=__version__, lifespan=lifespan)
     application.state.settings = app_settings
-    application.state.deps = deps
-    application.state.feedback = feedback
+    application.include_router(api)
+
+    # Adapters and the MCP transport mount at build time, but resolve their
+    # dependencies lazily from app.state so the index still loads in the
+    # lifespan rather than at import.
+    async def ask(payload: AskRequest) -> AskResponse:
+        return run_ask(payload, application.state.settings, application.state.deps)
+
+    async def feedback(payload: FeedbackRequest) -> None:
+        record_feedback(application, payload)
+
+    application.state.ask = ask
+    mount_channels(application, ask, app_settings, feedback)
+    application.state.mcp_runner = mount_mcp(application, app_settings, lambda: application.state.deps)
 
     @application.get("/health")
-    def health() -> dict[str, object]:
-        retriever = application.state.deps.retriever
-        return {"ok": True, "version": __version__, "chunks": retriever.chunk_count}
-
-    @application.post("/slack/events")
-    async def slack_events(
-        request: Request,
-        background_tasks: BackgroundTasks,
-        x_slack_signature: str = Header(default=""),
-        x_slack_request_timestamp: str = Header(default=""),
-        x_slack_retry_num: str | None = Header(default=None),
-    ) -> JSONResponse:
-        body = await request.body()
-        if not verify_slack_signature(
-            app_settings.slack_signing_secret,
-            x_slack_request_timestamp,
-            body,
-            x_slack_signature,
-        ):
-            raise HTTPException(status_code=401, detail="invalid Slack signature")
-        payload = json.loads(body.decode("utf-8") or "{}")
-        if payload.get("type") == "url_verification":
-            return JSONResponse({"challenge": payload.get("challenge", "")})
-
-        event_id = str(payload.get("event_id", ""))
-        if x_slack_retry_num is not None and event_id and not seen_events.add(event_id):
-            return JSONResponse({"ok": True, "deduped": True})
-        if event_id:
-            seen_events.add(event_id)
-
-        event = payload.get("event", {})
-        channel_id = str(event.get("channel", ""))
-        if app_settings.allowed_channels and channel_id not in app_settings.allowed_channels:
-            return JSONResponse({"ok": True, "ignored": "channel_not_allowed"})
-        background_tasks.add_task(process_slack_event, app_settings, deps, event)
-        return JSONResponse({"ok": True})
-
-    @application.post("/slack/interactions")
-    async def slack_interactions(
-        request: Request,
-        x_slack_signature: str = Header(default=""),
-        x_slack_request_timestamp: str = Header(default=""),
-    ) -> JSONResponse:
-        body = await request.body()
-        if not verify_slack_signature(
-            app_settings.slack_signing_secret,
-            x_slack_request_timestamp,
-            body,
-            x_slack_signature,
-        ):
-            raise HTTPException(status_code=401, detail="invalid Slack signature")
-        parsed = parse_qs(body.decode("utf-8"))
-        payload_raw = parsed.get("payload", ["{}"])[0]
-        payload = json.loads(payload_raw)
-        actions = payload.get("actions", [])
-        verdict = str(actions[0].get("value", "unknown")) if actions else "unknown"
-        user_id = str(payload.get("user", {}).get("id", "unknown"))
-        message = payload.get("message", {})
-        answer_ts = str(message.get("ts", ""))
-        question_hint = str(message.get("text", ""))
-        feedback.record(user_id=user_id, question=question_hint, answer_ts=answer_ts, verdict=verdict)
-        return JSONResponse({"ok": True})
+    def health(request: Request) -> dict[str, object]:
+        """Liveness endpoint echoing the resolved provider names."""
+        deps: PipelineDeps = request.app.state.deps
+        return {
+            "status": "ok",
+            "version": __version__,
+            "chunks": getattr(deps.retriever, "chunk_count", None),
+            "providers": provider_names(request.app.state.settings),
+        }
 
     return application
-
-
-async def process_slack_event(settings: Settings, deps: PipelineDeps, event: dict[str, Any]) -> None:
-    channel_id = str(event.get("channel", ""))
-    thread_ts = str(event.get("thread_ts") or event.get("ts") or "")
-    text = str(event.get("text", "")).strip()
-    if not text:
-        return
-    placeholder = await slack_post_message(settings, deps.breaker, channel_id, "Searching the Acme Storefront docs...", thread_ts)
-    result = answer_question(text, history=[], settings=settings, deps=deps)
-    blocks = render_answer_blocks(result.answer, result.chunks)
-    message_ts = str(placeholder.get("ts") or thread_ts)
-    await slack_update_message(settings, deps.breaker, channel_id, message_ts, result.answer, blocks)
-
-
-async def slack_post_message(
-    settings: Settings,
-    breaker: CircuitBreaker[object],
-    channel_id: str,
-    text: str,
-    thread_ts: str | None = None,
-) -> dict[str, Any]:
-    payload: dict[str, Any] = {"channel": channel_id, "text": text}
-    if thread_ts:
-        payload["thread_ts"] = thread_ts
-    return await _slack_api_call(settings, breaker, "chat.postMessage", payload)
-
-
-async def slack_update_message(
-    settings: Settings,
-    breaker: CircuitBreaker[object],
-    channel_id: str,
-    ts: str,
-    text: str,
-    blocks: list[dict[str, Any]],
-) -> dict[str, Any]:
-    payload: dict[str, Any] = {"channel": channel_id, "ts": ts, "text": text, "blocks": blocks}
-    return await _slack_api_call(settings, breaker, "chat.update", payload)
-
-
-async def _slack_api_call(
-    settings: Settings,
-    breaker: CircuitBreaker[object],
-    method: str,
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-    with breaker:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(
-                f"https://slack.com/api/{method}",
-                headers={"Authorization": f"Bearer {settings.slack_bot_token}"},
-                json=payload,
-            )
-            response.raise_for_status()
-            data = response.json()
-            if not data.get("ok", False):
-                raise RuntimeError(f"Slack API error for {method}: {data.get('error', 'unknown')}")
-            return dict(data)
 
 
 app = create_app()

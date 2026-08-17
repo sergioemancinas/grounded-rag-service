@@ -4,7 +4,7 @@ import hashlib
 import hmac
 import time
 
-from app.slack_io import verify_slack_signature
+from app.channels.slack import verify_slack_signature
 
 
 def sign(secret: str, timestamp: str, body: bytes) -> str:

@@ -1,28 +1,54 @@
 from __future__ import annotations
 
-import warnings
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, ImportString, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    """Runtime configuration; every field maps to one upper-cased env var.
+
+    An empty environment (and an empty or missing .env) boots the full
+    offline stack: local hash embeddings, extractive generation, JSONL
+    retrieval, no network calls.
+    """
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     app_env: str = "dev"
+
+    # Slack adapter (optional; consumed by the channel adapter, not the core)
     slack_bot_token: str = ""
     slack_signing_secret: str = ""
+    allowed_channel_ids: str = ""
 
+    # Providers by registry name
     embedding_provider: str = "local"
     generation_provider: str = "local"
+    grounding_judge: str = ""  # empty = auto-select from generation_provider
     openai_api_key: str = ""
     openai_generation_model: str = "gpt-4o"
     openai_expansion_model: str = "gpt-4o-mini"
     openai_embedding_model: str = "text-embedding-3-small"
 
+    # Providers by dotted path (escape hatches; win over registry names).
+    # These import and execute operator-supplied code at startup: set them
+    # only from the environment or .env, never from request data.
+    embedder_class: ImportString | None = None
+    generator_class: ImportString | None = None
+    reranker_class: ImportString | None = None
+    retriever_class: ImportString | None = None
+    grounding_judge_class: ImportString | None = None
+
     index_path: Path = Path("data/index.jsonl")
     feedback_db_path: Path = Path("data/feedback.sqlite3")
+
+    # Prompt overrides: directory of *.md files shadowing app/prompts/
+    prompts_dir: Path | None = None
+
+    # Optional static bearer token protecting /v1/* (empty = no auth)
+    api_auth_token: str = ""
 
     max_context_chunks: int = 10
     max_context_chars_per_chunk: int = 2600
@@ -42,14 +68,19 @@ class Settings(BaseSettings):
     cache_ttl_seconds: int = 7200
 
     router_enabled: bool = True
-    allowed_channel_ids: str = ""
 
     mcp_port: int = 8090
     mcp_auth_mode: str = "off"  # "off" (local demo only) | "jwt"
     mcp_auth_issuer: str = ""
     mcp_auth_audience: str = ""
     mcp_auth_jwks_url: str = ""  # optional; discovered from the issuer when empty
-    mcp_resource_url: str = ""  # public URL of this MCP server
+    mcp_auth_algorithms: str = "RS256"  # accepted JWT algorithms, comma-separated
+    mcp_resource_url: str = ""  # canonical public URL of this MCP server, including /mcp
+    mcp_extensions_module: str = ""  # module exposing register(server, deps, settings)
+    mcp_required_scopes: str = ""  # comma-separated scopes required on MCP tokens
+    mcp_tool_search_description: str = ""
+    mcp_tool_fetch_description: str = ""
+    mcp_tool_ask_description: str = ""
 
     @property
     def is_dev(self) -> bool:
@@ -59,15 +90,25 @@ class Settings(BaseSettings):
     def allowed_channels(self) -> set[str]:
         return {part.strip() for part in self.allowed_channel_ids.split(",") if part.strip()}
 
-    def validate_credentials(self) -> None:
-        missing: list[str] = []
-        if not self.slack_bot_token:
-            missing.append("SLACK_BOT_TOKEN")
-        if not self.slack_signing_secret:
-            missing.append("SLACK_SIGNING_SECRET")
-        if missing:
-            message = f"Missing required Slack credentials: {', '.join(missing)}"
-            if self.is_dev:
-                warnings.warn(message, RuntimeWarning, stacklevel=2)
-                return
-            raise RuntimeError(message)
+    @property
+    def mcp_scopes(self) -> set[str]:
+        return {part.strip() for part in self.mcp_required_scopes.split(",") if part.strip()}
+
+    @model_validator(mode="after")
+    def _validate_provider_credentials(self) -> Settings:
+        """Fail fast at startup on inconsistent provider configuration."""
+        if (
+            self.embedding_provider == "openai"
+            and self.embedder_class is None
+            and not self.openai_api_key
+        ):
+            raise ValueError("EMBEDDING_PROVIDER=openai requires OPENAI_API_KEY")
+        if (
+            self.generation_provider == "openai"
+            and self.generator_class is None
+            and not self.openai_api_key
+        ):
+            raise ValueError("GENERATION_PROVIDER=openai requires OPENAI_API_KEY")
+        if self.grounding_judge == "llm" and self.grounding_judge_class is None and not self.openai_api_key:
+            raise ValueError("GROUNDING_JUDGE=llm requires OPENAI_API_KEY")
+        return self

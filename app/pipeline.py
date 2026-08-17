@@ -6,10 +6,9 @@ from typing import Sequence
 
 from app.cache import SemanticCache
 from app.config import Settings
-from app.grounding import GroundingJudge, GroundingResult, get_grounding_judge
+from app.grounding import get_grounding_judge
+from app.interfaces import Embedder, Generator, GroundingJudge, GroundingResult, Reranker, Retriever
 from app.llm import Answer, expand_query, generate_answer
-from app.providers import Embedder, Generator
-from app.rerank import Reranker
 from app.resilience import CircuitBreaker
 from app.retrieval import ScoredChunk, mmr_select, reciprocal_rank_fusion
 from app.router import RouterResult, route_intent
@@ -17,9 +16,16 @@ from app.router import RouterResult, route_intent
 
 @dataclass
 class PipelineDeps:
+    """Everything answer_question() needs, one Protocol-typed slot per stage.
+
+    Stages must treat their inputs as read-only (copy, don't mutate); see
+    app/interfaces.py for each contract. Construct directly in tests, or via
+    app.deps.build_deps for the registry-wired composition.
+    """
+
     embedder: Embedder
     generator: Generator
-    retriever: object
+    retriever: Retriever
     reranker: Reranker
     cache: SemanticCache
     breaker: CircuitBreaker[object]
@@ -95,7 +101,7 @@ def answer_question(
     phrase_embeddings = deps.breaker.call(deps.embedder.embed, phrasings)
     retrieval_lists: list[list[ScoredChunk]] = []
     for phrasing, embedding in zip(phrasings, phrase_embeddings):
-        retrieval_lists.append(deps.retriever.retrieve(phrasing, embedding, settings.rerank_pool))  # type: ignore[attr-defined]
+        retrieval_lists.append(deps.retriever.retrieve(phrasing, embedding, settings.rerank_pool))
     merged = reciprocal_rank_fusion(retrieval_lists, settings.rerank_pool)
     timings["retrieve"] = time.perf_counter() - retrieve_start
 

@@ -2,23 +2,22 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
-from typing import Protocol, Sequence
+from typing import Sequence
 
 from app.config import Settings
+from app.interfaces import GroundingJudge, GroundingResult
+from app.prompts import load_prompt
+from app.registry import GROUNDING_JUDGES, register_grounding_judge, resolve
 from app.retrieval import ScoredChunk, tokenize
 
 
-@dataclass(frozen=True)
-class GroundingResult:
-    score: float
-    verdict: str
-    reasons: list[str]
-
-
-class GroundingJudge(Protocol):
-    def judge(self, answer: str, chunks: Sequence[ScoredChunk]) -> GroundingResult:
-        ...
+__all__ = [
+    "GroundingJudge",
+    "GroundingResult",
+    "HeuristicGroundingJudge",
+    "OpenAIGroundingJudge",
+    "get_grounding_judge",
+]
 
 
 class HeuristicGroundingJudge:
@@ -69,11 +68,7 @@ class OpenAIGroundingJudge:
             f"SOURCE [{index}]\n{chunk.chunk.text[: self.settings.max_context_chars_per_chunk]}"
             for index, chunk in enumerate(chunks, start=1)
         )
-        prompt = (
-            "Return strict JSON with keys score, verdict, reasons. Score 0..1 for whether "
-            "the answer is faithful to the sources. Penalize unsupported claims.\n\n"
-            f"Sources:\n{context}\n\nAnswer:\n{answer}"
-        )
+        prompt = load_prompt("grounding_judge", self.settings, sources=context, answer=answer)
         try:
             response = self.client.chat.completions.create(  # type: ignore[attr-defined]
                 model=self.settings.openai_expansion_model,
@@ -95,7 +90,25 @@ class OpenAIGroundingJudge:
             return GroundingResult(score=0.0, verdict="judge_error", reasons=[str(exc)])
 
 
-def get_grounding_judge(settings: Settings) -> GroundingJudge:
-    if settings.generation_provider == "openai" and settings.openai_api_key:
-        return OpenAIGroundingJudge(settings)
+@register_grounding_judge("heuristic")
+def _heuristic_judge(settings: Settings) -> GroundingJudge:
+    del settings
     return HeuristicGroundingJudge()
+
+
+@register_grounding_judge("llm")
+def _llm_judge(settings: Settings) -> GroundingJudge:
+    return OpenAIGroundingJudge(settings)
+
+
+def get_grounding_judge(settings: Settings) -> GroundingJudge:
+    """Resolve the judge from GROUNDING_JUDGE_CLASS, GROUNDING_JUDGE, or auto.
+
+    Auto-selection (empty GROUNDING_JUDGE) picks the LLM judge only when the
+    generation provider is OpenAI with a key present, else the heuristic.
+    """
+    name = settings.grounding_judge
+    if not name:
+        use_llm = settings.generation_provider == "openai" and bool(settings.openai_api_key)
+        name = "llm" if use_llm else "heuristic"
+    return resolve(name, settings.grounding_judge_class, GROUNDING_JUDGES, settings, "grounding judge")

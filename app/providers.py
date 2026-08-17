@@ -1,25 +1,37 @@
+"""Built-in stage implementations and their registry factories.
+
+Every stage keeps a zero-dependency local default so the whole service runs
+offline with an empty environment. Provider SDK imports stay lazy inside
+method bodies, keeping ``openai`` optional. Built-ins register themselves in
+app/registry.py via the ``@register_*`` decorators; the ``get_*`` resolvers
+below check the dotted-path ``*_CLASS`` escape hatches first.
+"""
+
 from __future__ import annotations
 
 import hashlib
 import math
 import re
 from dataclasses import dataclass
-from typing import Protocol
 
 from app.config import Settings
+from app.interfaces import Embedder, Generator, Reranker, Retriever
+from app.registry import (
+    EMBEDDERS,
+    GENERATORS,
+    RERANKERS,
+    STORES,
+    register_embedder,
+    register_generator,
+    register_reranker,
+    register_store,
+    resolve,
+)
+from app.rerank import CrossEncoderReranker, PassthroughReranker
+from app.retrieval import Retriever as JSONLRetriever
 
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9_./-]+")
-
-
-class Embedder(Protocol):
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        ...
-
-
-class Generator(Protocol):
-    def generate(self, system: str, user: str, max_tokens: int) -> str:
-        ...
 
 
 def _tokens(text: str) -> list[str]:
@@ -130,13 +142,61 @@ class OpenAIGenerator:
         return content or ""
 
 
-def get_embedder(settings: Settings) -> Embedder:
-    if settings.embedding_provider == "openai":
-        return OpenAIEmbedder(settings.openai_api_key, settings.openai_embedding_model)
+@register_embedder("local")
+def _local_embedder(settings: Settings) -> Embedder:
+    del settings
     return LocalHashEmbedder()
 
 
-def get_generator(settings: Settings) -> Generator:
-    if settings.generation_provider == "openai":
-        return OpenAIGenerator(settings.openai_api_key, settings.openai_generation_model)
+@register_embedder("openai")
+def _openai_embedder(settings: Settings) -> Embedder:
+    return OpenAIEmbedder(settings.openai_api_key, settings.openai_embedding_model)
+
+
+@register_generator("local")
+def _local_generator(settings: Settings) -> Generator:
+    del settings
     return LocalExtractiveGenerator()
+
+
+@register_generator("openai")
+def _openai_generator(settings: Settings) -> Generator:
+    return OpenAIGenerator(settings.openai_api_key, settings.openai_generation_model)
+
+
+@register_reranker("passthrough")
+def _passthrough_reranker(settings: Settings) -> Reranker:
+    del settings
+    return PassthroughReranker()
+
+
+@register_reranker("cross_encoder")
+def _cross_encoder_reranker(settings: Settings) -> Reranker:
+    del settings
+    return CrossEncoderReranker()
+
+
+@register_store("jsonl")
+def _jsonl_retriever(settings: Settings) -> Retriever:
+    return JSONLRetriever(settings.index_path, settings)
+
+
+def get_embedder(settings: Settings) -> Embedder:
+    """Resolve the embedder from EMBEDDER_CLASS or EMBEDDING_PROVIDER."""
+    return resolve(settings.embedding_provider, settings.embedder_class, EMBEDDERS, settings, "embedder")
+
+
+def get_generator(settings: Settings) -> Generator:
+    """Resolve the generator from GENERATOR_CLASS or GENERATION_PROVIDER."""
+    return resolve(settings.generation_provider, settings.generator_class, GENERATORS, settings, "generator")
+
+
+def get_reranker(settings: Settings) -> Reranker:
+    """Resolve the reranker from RERANKER_CLASS or the RERANK_ENABLED switch."""
+    name = "cross_encoder" if settings.rerank_enabled else "passthrough"
+    return resolve(name, settings.reranker_class, RERANKERS, settings, "reranker")
+
+
+def get_retriever(settings: Settings) -> Retriever:
+    """Resolve the retriever from RETRIEVER_CLASS or the 'jsonl' default."""
+    return resolve("jsonl", settings.retriever_class, STORES, settings, "retriever")
