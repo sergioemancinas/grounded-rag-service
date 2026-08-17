@@ -17,12 +17,14 @@ it installed.
 
 from __future__ import annotations
 
+import functools
 import importlib
 import logging
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from typing import Any
 
+from app.audit import audit_tool_call
 from app.cache import GLOBAL_SCOPE
 from app.config import Settings
 from app.mcp_auth import (
@@ -83,6 +85,34 @@ def _import_mcp_server_class() -> Any:
         ) from error
 
 
+def _install_tool_audit(server: Any, settings: Settings) -> None:
+    """Wrap ``server.tool`` so every registered tool (built-in and extension) is audited.
+
+    Extensions call the same decorator the builtins use; replacing it once at
+    construction is the only way to cover ``MCP_EXTENSIONS_MODULE`` without
+    asking operators to remember an audit helper.
+    """
+    original_tool = server.tool
+
+    @functools.wraps(original_tool)
+    def tool(*args: Any, **kwargs: Any) -> Any:
+        # Bare ``@server.tool`` (callable as the sole positional).
+        if len(args) == 1 and callable(args[0]) and not kwargs:
+            fn = args[0]
+            return original_tool(audit_tool_call(fn.__name__, settings.feedback_hmac_key)(fn))
+
+        register = original_tool(*args, **kwargs)
+
+        def decorate(fn: Callable[..., Any]) -> Any:
+            name = kwargs.get("name")
+            tool_name = name if isinstance(name, str) and name else fn.__name__
+            return register(audit_tool_call(tool_name, settings.feedback_hmac_key)(fn))
+
+        return decorate
+
+    server.tool = tool
+
+
 def build_mcp_server(settings: Settings, deps_provider: Callable[[], PipelineDeps]) -> Any:
     """Create the MCP server and register the built-in and custom tools.
 
@@ -91,6 +121,7 @@ def build_mcp_server(settings: Settings, deps_provider: Callable[[], PipelineDep
     """
     server_class = _import_mcp_server_class()
     server = server_class("citespine")
+    _install_tool_audit(server, settings)
 
     @server.tool(description=settings.mcp_tool_search_description or DEFAULT_SEARCH_DESCRIPTION)
     def search(query: str, k: int = 5) -> list[dict[str, object]]:

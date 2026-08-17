@@ -53,6 +53,16 @@ class Settings(BaseSettings):
     # Optional static bearer token protecting /v1/* (empty = no auth)
     api_auth_token: str = ""
 
+    # Per-caller rate limit on /v1/* (LLM10). Disabled only for local load tests.
+    rate_limit_enabled: bool = True
+    rate_limit_requests: int = 60
+    rate_limit_window_seconds: int = 60
+    # Reject oversized questions before any provider call (422 via pydantic).
+    max_question_chars: int = 4000
+
+    # Index integrity check on load: "strict" | "warn" | "off" (LLM04 / STRIDE tampering).
+    index_verify: str = "warn"
+
     max_context_chunks: int = 10
     max_context_chars_per_chunk: int = 2600
     rerank_enabled: bool = False

@@ -42,6 +42,7 @@ from app.config import Settings
 from app.deps import build_deps, get_deps, get_settings, provider_names
 from app.feedback import FeedbackStore
 from app.pipeline import PipelineDeps, answer_question
+from app.ratelimit import TokenBucketLimiter
 
 logger = logging.getLogger("citespine")
 
@@ -140,7 +141,39 @@ def require_api_auth(request: Request) -> None:
         raise HTTPException(status_code=401, detail="invalid or missing bearer token")
 
 
-api = APIRouter(prefix="/v1", dependencies=[Depends(require_api_auth)])
+def rate_limit_key(request: Request, settings: Settings) -> str:
+    """Caller identity for the rate-limit bucket.
+
+    When a static bearer is configured and the request carries it, the key is
+    that principal: a shared token is not per-user auth, so every valid bearer
+    shares one budget. Otherwise the key is the client host, which is the only
+    stable identity an open deployment has.
+    """
+    if settings.api_auth_token:
+        provided = request.headers.get("authorization", "")
+        expected = f"Bearer {settings.api_auth_token}"
+        if hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8")):
+            return f"token:{settings.api_auth_token}"
+    host = request.client.host if request.client is not None else "unknown"
+    return f"host:{host}"
+
+
+def enforce_rate_limit(request: Request) -> None:
+    """Reject /v1 callers that have exhausted their token bucket (HTTP 429)."""
+    settings: Settings = request.app.state.settings
+    if not settings.rate_limit_enabled:
+        return
+    limiter: TokenBucketLimiter = request.app.state.rate_limiter
+    allowed, retry_after = limiter.allow(rate_limit_key(request, settings))
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="rate limit exceeded",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+
+api = APIRouter(prefix="/v1", dependencies=[Depends(require_api_auth), Depends(enforce_rate_limit)])
 
 
 @api.post("/ask", response_model=AskResponse)
@@ -215,6 +248,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app_settings = settings or Settings()
     application = FastAPI(title="citespine", version=__version__, lifespan=lifespan)
     application.state.settings = app_settings
+    application.state.rate_limiter = TokenBucketLimiter(
+        requests=app_settings.rate_limit_requests,
+        window_seconds=app_settings.rate_limit_window_seconds,
+    )
     application.include_router(api)
 
     # Adapters and the MCP transport mount at build time, but resolve their

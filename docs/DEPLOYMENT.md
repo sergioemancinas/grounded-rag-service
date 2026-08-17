@@ -59,6 +59,23 @@ simplest thing that works; for real multi-user access put an authenticating
 proxy in front, or implement per-user authorization at retrieval time, which
 this skeleton does not attempt.
 
+Rate limiting is on by default (60 requests per caller per minute) and
+oversized questions are rejected before any provider call, so an open
+deployment cannot be trivially turned into a bill. Note the interaction with
+a static bearer: every caller presenting the same token shares one budget,
+because a shared token is not per-user identity. Tune with
+`RATE_LIMIT_REQUESTS` and `RATE_LIMIT_WINDOW_SECONDS`.
+
+Set `INDEX_VERIFY=strict` in production so the service refuses to start if
+the index does not match its manifest. Write access to `data/` is equivalent
+to control over every answer the service gives, so treat the index as code
+and rebuild it in CI rather than editing it in place.
+
+Ship the `citespine.audit` logger somewhere durable. It emits one structured
+JSON event per MCP tool call with the caller subject and outcome, which is
+what makes an incident reconstructable; kept only in a container's stdout it
+disappears with the container.
+
 Other pre-flight items:
 
 - Set `MCP_AUTH_MODE=jwt` if the MCP endpoint is reachable. The default

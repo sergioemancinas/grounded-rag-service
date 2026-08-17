@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
+import logging
 import math
 import re
 from collections import Counter, defaultdict
@@ -10,12 +13,76 @@ from pathlib import Path
 
 from app.config import Settings
 
+logger = logging.getLogger("citespine.retrieval")
+
 TOKEN_RE = re.compile(r"[A-Za-z0-9_./-]+")
 IDENTIFIER_RE = re.compile(
     r"\b[A-Z][A-Z0-9_]{2,}\b|/[A-Za-z0-9_./-]+|"
     r"\b[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+\b|"
     r"\b[A-Za-z][A-Za-z0-9-]*(?:\.[A-Za-z0-9-]+)+\b"
 )
+
+MANIFEST_SCHEMA_VERSION = 1
+
+
+def index_manifest_path(index_path: Path) -> Path:
+    """Sidecar path for ``index.jsonl`` → ``index.manifest.json``."""
+    return index_path.with_name(f"{index_path.stem}.manifest.json")
+
+
+def file_sha256(path: Path) -> str:
+    """Content digest used to detect on-disk tampering of the index."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            block = handle.read(65536)
+            if not block:
+                break
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_index_integrity(index_path: Path, settings: Settings) -> None:
+    """Check the index against its sidecar manifest when one is present.
+
+    Write access to ``data/`` is otherwise equivalent to control over every
+    answer (LLM04 / STRIDE tampering). A missing manifest is tolerated so
+    older indexes still load; ``index_verify`` chooses how mismatches fail.
+    """
+    mode = settings.index_verify.lower().strip()
+    if mode == "off":
+        return
+    manifest_path = index_manifest_path(index_path)
+    if not manifest_path.exists():
+        logger.warning(
+            "index integrity: no manifest at %s; corpus integrity is unverified",
+            manifest_path,
+        )
+        return
+    if not index_path.exists():
+        return
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        message = f"index integrity: unreadable manifest {manifest_path}: {error}"
+        if mode == "strict":
+            raise RuntimeError(message) from error
+        logger.warning("%s", message)
+        return
+    expected = str(manifest.get("index_sha256", ""))
+    actual = file_sha256(index_path)
+    if not expected or not _digests_match(expected, actual):
+        message = f"index integrity: digest mismatch for {index_path} (manifest={expected!r}, actual={actual!r})"
+        if mode == "strict":
+            raise RuntimeError(message)
+        logger.warning("%s", message)
+
+
+def _digests_match(left: str, right: str) -> bool:
+    """Constant-time hex digest compare; length mismatch is a miss, not an error."""
+    if len(left) != len(right):
+        return False
+    return hmac.compare_digest(left.encode("ascii"), right.encode("ascii"))
 
 
 @dataclass(frozen=True)
@@ -28,12 +95,18 @@ class Chunk:
     text: str
     identifiers: list[str] = field(default_factory=list)
     embedding: list[float] = field(default_factory=list)
+    # Provenance: which ingestion source produced this chunk, and the URL of
+    # the originating document. Both travel with the answer so a poisoned
+    # corpus entry can be traced after the fact.
+    source: str = ""
+    source_url: str = ""
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> Chunk:
         heading_path = data.get("heading_path", [])
         identifiers = data.get("identifiers", [])
         embedding = data.get("embedding", [])
+        source_url = str(data.get("source_url", "") or data.get("url", ""))
         return cls(
             id=str(data["id"]),
             doc_id=str(data["doc_id"]),
@@ -43,6 +116,8 @@ class Chunk:
             text=str(data["text"]),
             identifiers=[str(item) for item in identifiers] if isinstance(identifiers, list) else [],
             embedding=[float(item) for item in embedding] if isinstance(embedding, list) else [],
+            source=str(data.get("source", "")),
+            source_url=source_url,
         )
 
 
@@ -151,6 +226,7 @@ class Retriever:
     def __init__(self, index_path: Path, settings: Settings | None = None) -> None:
         self.index_path = index_path
         self.settings = settings or Settings()
+        verify_index_integrity(index_path, self.settings)
         self.chunks: list[Chunk] = self._load_index(index_path)
         self._tokens_by_id: dict[str, list[str]] = {chunk.id: tokenize(chunk.text) for chunk in self.chunks}
         self._term_freqs: dict[str, Counter[str]] = {

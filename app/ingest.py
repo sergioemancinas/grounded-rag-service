@@ -160,12 +160,22 @@ class MarkdownSource:
                 )
 
 
-def build_records(source: Source, settings: Settings) -> list[dict[str, object]]:
-    """Chunk-agnostic embed+index stage: Documents in, JSONL records out."""
+def build_records(
+    source: Source,
+    settings: Settings,
+    source_id: str = "",
+) -> list[dict[str, object]]:
+    """Chunk-agnostic embed+index stage: Documents in, JSONL records out.
+
+    ``source_id`` is recorded on every chunk so an answer can be traced to the
+    ingestion source that produced its text; without it a poisoned document
+    is indistinguishable from a trusted one after the fact.
+    """
     embedder = get_embedder(settings)
     documents = list(source.load())
     texts = [document.text for document in documents]
     embeddings = embedder.embed(texts) if texts else []
+    resolved_source = source_id or source_identifier(source)
     records: list[dict[str, object]] = []
     for document, embedding in zip(documents, embeddings, strict=True):
         records.append(
@@ -175,9 +185,18 @@ def build_records(source: Source, settings: Settings) -> list[dict[str, object]]
                 "title": str(document.metadata.get("title", "")),
                 "heading_path": list(document.metadata.get("heading_path", [])),
                 "url": document.source_url,
+                "source": resolved_source,
+                "source_url": document.source_url,
                 "text": document.text,
                 "identifiers": extract_identifiers(document.text),
                 "embedding": embedding,
             }
         )
     return records
+
+
+def source_identifier(source: Source) -> str:
+    """Stable identifier for the source that produced the documents."""
+    if isinstance(source, MarkdownSource):
+        return f"markdown:{source.docs_dir}"
+    return f"{type(source).__module__}:{type(source).__qualname__}"
