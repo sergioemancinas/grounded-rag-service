@@ -111,9 +111,7 @@ def test_jwt_mode_accepts_valid_token_and_rejects_bad_claims() -> None:
 
 def test_jwt_mode_rejects_disallowed_algorithm() -> None:
     jwks, private_key = _rsa_jwks_and_signer()
-    verifier = TokenVerifier(
-        mode="jwt", issuer=ISSUER, audience=RESOURCE, jwks=jwks, algorithms=("PS256",)
-    )
+    verifier = TokenVerifier(mode="jwt", issuer=ISSUER, audience=RESOURCE, jwks=jwks, algorithms=("PS256",))
     claims = {"iss": ISSUER, "aud": RESOURCE, "exp": int(time.time()) + 300}
 
     assert verifier.verify_token(_sign(private_key, claims)) is None
@@ -143,9 +141,7 @@ def _request(app, path: str, headers: dict[str, str] | None = None) -> httpx.Res
 
 
 def test_middleware_serves_metadata_on_both_well_known_paths() -> None:
-    app = OAuthResourceMiddleware(
-        _dummy_app, verifier=_StaticVerifier(None), resource_url=RESOURCE, issuer=ISSUER
-    )
+    app = OAuthResourceMiddleware(_dummy_app, verifier=_StaticVerifier(None), resource_url=RESOURCE, issuer=ISSUER)
 
     for path in (WELL_KNOWN_PREFIX, f"{WELL_KNOWN_PREFIX}/mcp"):
         response = _request(app, path)
@@ -160,9 +156,7 @@ def test_canonical_url_is_identical_across_metadata_challenge_and_audience() -> 
     A mismatch here is the classic failure where local tests pass and every
     real token is rejected, so it is asserted explicitly.
     """
-    app = OAuthResourceMiddleware(
-        _dummy_app, verifier=_StaticVerifier(None), resource_url=RESOURCE, issuer=ISSUER
-    )
+    app = OAuthResourceMiddleware(_dummy_app, verifier=_StaticVerifier(None), resource_url=RESOURCE, issuer=ISSUER)
     metadata_resource = _request(app, f"{WELL_KNOWN_PREFIX}/mcp").json()["resource"]
     challenge = _request(app, "/mcp").headers["www-authenticate"]
     verifier_audience = TokenVerifier(mode="jwt", issuer=ISSUER, audience=RESOURCE).audience
@@ -172,9 +166,7 @@ def test_canonical_url_is_identical_across_metadata_challenge_and_audience() -> 
 
 
 def test_missing_token_gets_401_with_challenge() -> None:
-    app = OAuthResourceMiddleware(
-        _dummy_app, verifier=_StaticVerifier(None), resource_url=RESOURCE, issuer=ISSUER
-    )
+    app = OAuthResourceMiddleware(_dummy_app, verifier=_StaticVerifier(None), resource_url=RESOURCE, issuer=ISSUER)
 
     denied = _request(app, "/mcp")
 
@@ -210,9 +202,7 @@ def test_sufficient_scope_passes_through() -> None:
 
 
 def test_middleware_passes_through_when_auth_off() -> None:
-    app = OAuthResourceMiddleware(
-        _dummy_app, verifier=TokenVerifier(mode="off"), resource_url=RESOURCE, issuer=""
-    )
+    app = OAuthResourceMiddleware(_dummy_app, verifier=TokenVerifier(mode="off"), resource_url=RESOURCE, issuer="")
 
     response = _request(app, "/mcp")
     assert response.status_code == 200

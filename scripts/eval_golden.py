@@ -16,7 +16,14 @@ from app.pipeline import answer_question
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Evaluate golden questions against the offline pipeline.")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Offline smoke test against the bundled golden questions. "
+            "Not a retrieval benchmark: the sample corpus is tiny and every "
+            "question can retrieve chunks from every document. For public "
+            "nDCG numbers see scripts/eval_beir.py and docs/EVALUATION.md."
+        )
+    )
     parser.add_argument("--golden", type=Path, default=Path("data/golden_questions.example.jsonl"))
     parser.add_argument("--threshold", type=float, default=0.85)
     return parser.parse_args()

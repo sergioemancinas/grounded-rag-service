@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from typing import Protocol, Sequence
+from collections.abc import Sequence
+from typing import Protocol
 
 from app.config import Settings
 from app.retrieval import ScoredChunk
 
 
 class Reranker(Protocol):
-    def rerank(self, query: str, chunks: Sequence[ScoredChunk], top_k: int) -> list[ScoredChunk]:
-        ...
+    def rerank(self, query: str, chunks: Sequence[ScoredChunk], top_k: int) -> list[ScoredChunk]: ...
 
 
 class PassthroughReranker:

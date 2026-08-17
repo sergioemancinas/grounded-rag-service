@@ -4,15 +4,18 @@ import json
 import math
 import re
 from collections import Counter, defaultdict
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Sequence
 
 from app.config import Settings
 
-
 TOKEN_RE = re.compile(r"[A-Za-z0-9_./-]+")
-IDENTIFIER_RE = re.compile(r"\b[A-Z][A-Z0-9_]{2,}\b|/[A-Za-z0-9_./-]+|\b[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+\b|\b[A-Za-z][A-Za-z0-9-]*(?:\.[A-Za-z0-9-]+)+\b")
+IDENTIFIER_RE = re.compile(
+    r"\b[A-Z][A-Z0-9_]{2,}\b|/[A-Za-z0-9_./-]+|"
+    r"\b[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+\b|"
+    r"\b[A-Za-z][A-Za-z0-9-]*(?:\.[A-Za-z0-9-]+)+\b"
+)
 
 
 @dataclass(frozen=True)
@@ -28,15 +31,18 @@ class Chunk:
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> Chunk:
+        heading_path = data.get("heading_path", [])
+        identifiers = data.get("identifiers", [])
+        embedding = data.get("embedding", [])
         return cls(
             id=str(data["id"]),
             doc_id=str(data["doc_id"]),
             title=str(data["title"]),
-            heading_path=[str(item) for item in data.get("heading_path", [])],
+            heading_path=[str(item) for item in heading_path] if isinstance(heading_path, list) else [],
             url=str(data.get("url", "")),
             text=str(data["text"]),
-            identifiers=[str(item) for item in data.get("identifiers", [])],
-            embedding=[float(item) for item in data.get("embedding", [])],
+            identifiers=[str(item) for item in identifiers] if isinstance(identifiers, list) else [],
+            embedding=[float(item) for item in embedding] if isinstance(embedding, list) else [],
         )
 
 
@@ -192,7 +198,11 @@ class Retriever:
 
     def _dense_rank(self, query_embedding: Sequence[float], limit: int) -> list[ScoredChunk]:
         scored = [
-            ScoredChunk(chunk=chunk, score=cosine_similarity(query_embedding, chunk.embedding), scores={"dense": cosine_similarity(query_embedding, chunk.embedding)})
+            ScoredChunk(
+                chunk=chunk,
+                score=cosine_similarity(query_embedding, chunk.embedding),
+                scores={"dense": cosine_similarity(query_embedding, chunk.embedding)},
+            )
             for chunk in self.chunks
         ]
         scored = [item for item in scored if item.score > 0.0]
@@ -203,12 +213,20 @@ class Retriever:
         query_tokens = tokenize(query)
         if self.settings.lexical_scorer == "overlap":
             scored = [
-                ScoredChunk(chunk=chunk, score=self._overlap_score(query_tokens, chunk), scores={"overlap": self._overlap_score(query_tokens, chunk)})
+                ScoredChunk(
+                    chunk=chunk,
+                    score=self._overlap_score(query_tokens, chunk),
+                    scores={"overlap": self._overlap_score(query_tokens, chunk)},
+                )
                 for chunk in self.chunks
             ]
         else:
             scored = [
-                ScoredChunk(chunk=chunk, score=self._bm25_score(query_tokens, chunk), scores={"bm25": self._bm25_score(query_tokens, chunk)})
+                ScoredChunk(
+                    chunk=chunk,
+                    score=self._bm25_score(query_tokens, chunk),
+                    scores={"bm25": self._bm25_score(query_tokens, chunk)},
+                )
                 for chunk in self.chunks
             ]
         scored = [item for item in scored if item.score > 0.0]

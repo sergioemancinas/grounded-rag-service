@@ -1,0 +1,68 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "citespine"
+version = "0.1.0"
+description = "Grounded, citation-first RAG service skeleton"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{ name = "Sergio Mancinas" }]
+dependencies = [
+  "fastapi",
+  "uvicorn",
+  "pydantic",
+  "pydantic-settings",
+  "httpx",
+  "openai",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "mypy"]
+mcp = ["mcp", "PyJWT[crypto]"]
+# Slack adapter needs only httpx (already a core dep); group kept explicit and deletable.
+slack = []
+# scripts/eval_golden.py uses only core deps today; group reserved for eval extras.
+eval = []
+
+[project.scripts]
+citespine-serve = "app.main:serve"
+citespine-index = "scripts.build_index:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+# scripts/ is not a package directory (no __init__.py); include the index CLI for the console entry point.
+[tool.hatch.build.targets.wheel.force-include]
+"scripts/build_index.py" = "scripts/build_index.py"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+# Everything ships to readers, so everything is linted: app/, scripts/,
+# examples/, and tests/ alike. Excluding paths to get a green run would make
+# `ruff check .` a claim about a subset nobody can see from the output.
+extend-exclude = ["data"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = [
+  "B008",  # FastAPI Depends() in defaults is the framework's intended pattern
+]
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_ignores = true
+ignore_missing_imports = true  # optional deps (mcp, jwt, etc.) are not always installed
+files = ["app"]
+
+[[tool.mypy.overrides]]
+module = ["app", "app.*"]
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+pythonpath = ["."]

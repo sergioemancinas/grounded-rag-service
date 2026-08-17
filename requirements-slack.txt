@@ -1,8 +1,9 @@
-# Slack adapter extras.
+# Authoritative: pyproject.toml [project.optional-dependencies] slack
 #
 # The adapter needs only httpx, which is already a core dependency, so this
 # file installs nothing beyond requirements.txt today. It exists so the
 # adapter's dependency surface stays explicit and separately deletable: if
-# you add the Slack SDK or a signature helper, it belongs here, not in
-# requirements.txt.
+# you add the Slack SDK or a signature helper, it belongs here (and in the
+# pyproject slack extra), not in requirements.txt / [project] dependencies.
+# Equivalent: pip install -e ".[slack]"
 -r requirements.txt

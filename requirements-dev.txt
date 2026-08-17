@@ -1,2 +1,6 @@
+# Authoritative: pyproject.toml [project.optional-dependencies] dev
+# Equivalent: pip install -e ".[dev]"
 -r requirements.txt
 pytest
+ruff
+mypy

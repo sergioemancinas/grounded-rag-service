@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
 from app.config import Settings
 from app.interfaces import Generator
@@ -67,6 +67,8 @@ def generate_answer(
     return Answer(text=answer_text, citations=citations)
 
 
-def suggest_followups(question: str, answer: Answer, settings: Settings, generator: Generator | None = None) -> list[str]:
+def suggest_followups(
+    question: str, answer: Answer, settings: Settings, generator: Generator | None = None
+) -> list[str]:
     del question, answer, settings, generator
     return []

@@ -30,7 +30,6 @@ from app.registry import (
 from app.rerank import CrossEncoderReranker, PassthroughReranker
 from app.retrieval import Retriever as JSONLRetriever
 
-
 TOKEN_RE = re.compile(r"[A-Za-z0-9_./-]+")
 
 

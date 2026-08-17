@@ -1,5 +1,9 @@
 # citespine
 
+[![CI](https://github.com/sergioemancinas/citespine/actions/workflows/ci.yml/badge.svg)](https://github.com/sergioemancinas/citespine/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 **Grounded, citation-first RAG service skeleton. FastAPI, channel-agnostic, zero API keys to run.**
 
 - **Grounded by construction.** Every answer is generated from retrieved chunks, cites them inline, and passes a faithfulness gate before it is delivered.
@@ -48,9 +52,39 @@ Other ways in:
 ```bash
 python examples/adapter_cli.py "How do refunds work?"   # same pipeline, in your terminal
 python scripts/smoke_query.py "How do refunds work?"    # retrieval + timings
-python scripts/eval_golden.py                           # score against the golden set
+python scripts/eval_golden.py                           # fast smoke test (not an evaluation)
+python scripts/eval_beir.py --lanes bm25,dense,hybrid   # the real benchmark, see Results
 python -m pytest                                        # full suite, offline
 ```
+
+## Results
+
+Measured on [BEIR SciFact](https://arxiv.org/abs/2104.08663) (300 test
+queries, 5,183 documents) with this repo's own retrieval code. Reproduce with
+`python scripts/eval_beir.py --lanes bm25,dense,hybrid`.
+
+| Lane | nDCG@10 | Recall@10 | MRR@10 |
+| --- | --- | --- | --- |
+| BM25 only | **0.6047** | 0.7262 | 0.5697 |
+| Dense only (offline default embedder) | 0.1557 | 0.2381 | 0.1322 |
+| Hybrid, RRF | 0.3756 | 0.5361 | 0.3322 |
+
+Published BEIR reference for SciFact BM25 is nDCG@10 0.665, from a different
+implementation (Elasticsearch, multi-field). Shown for orientation; this is
+not a reproduction of it.
+
+**Read that table honestly: hybrid retrieval is 38% worse than BM25 alone in
+the default configuration.** The fusion is not at fault; the offline default
+embedder is. `LocalHashEmbedder` is a hashing trick that makes the
+zero-credential quickstart possible and carries almost no semantic signal
+(0.1557 standalone), so RRF blends a strong lane with a near-random one.
+Hybrid retrieval is the right design *with a real embedding model behind the
+dense lane*, and the numbers above are what it costs without one.
+
+This is also why the bundled fictional corpus is a smoke test rather than an
+evaluation: three documents cannot expose a regression that a public
+benchmark found on the first run. Full methodology, licensing, and
+limitations: [docs/EVALUATION.md](docs/EVALUATION.md).
 
 ## HTTP API
 
@@ -123,7 +157,7 @@ Full recipes: [docs/EXTENDING.md](docs/EXTENDING.md). Design rationale: [docs/AR
 
 ## Design notes
 
-**Hybrid retrieval**, because real questions contain identifiers. Dense vectors capture "how do I send an order back", lexical matching captures `fulfillment_type` and `POST /v1/orders`, and only one of those is a paraphrase problem. Exact identifier matches are force-injected into the candidate pool so precise API questions cannot be ranked away.
+**Hybrid retrieval**, because real questions contain identifiers. Dense vectors capture "how do I send an order back", lexical matching captures `fulfillment_type` and `POST /v1/orders`, and only one of those is a paraphrase problem. Exact identifier matches are force-injected into the candidate pool so precise API questions cannot be ranked away. The measured caveat is above: this holds only when the dense lane runs a real embedding model, and the benchmark shows what it costs when it does not.
 
 **RRF over score mixing**, because a cosine similarity and a BM25 score are not on a shared scale. Fusing by rank sidesteps the tuning problem that weighted score mixing creates.
 
@@ -131,7 +165,9 @@ Full recipes: [docs/EXTENDING.md](docs/EXTENDING.md). Design rationale: [docs/AR
 
 **Fail-closed verification.** An unset Slack signing secret rejects every request rather than accepting unsigned ones. An unknown provider name fails at startup, listing what is available, rather than at the first request.
 
-**Hashed feedback.** User ids and questions are stored as SHA-256 digests, so verdict counts survive without accumulating a log of who asked what.
+**Keyed feedback digests.** User ids and questions are stored as HMAC-SHA256 digests under a secret key, not plain hashes. A bare SHA-256 of a platform user id or a natural-language question is reversible by enumeration or dictionary attack, so only the key makes the digest unlinkable to whoever later reads the database. Even keyed, this is pseudonymization rather than anonymization: with the key the mapping is recoverable, so the rows remain personal data under GDPR.
+
+**Scoped answer cache.** A cache hit skips retrieval entirely, which makes the cache, not the retriever, the place where an answer would cross an authorization boundary. Entries are therefore partitioned by caller scope, so adding per-document permissions later cannot silently turn the cache into a cross-user disclosure channel.
 
 ## Non-goals
 

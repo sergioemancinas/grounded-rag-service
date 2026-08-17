@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from contextlib import ContextDecorator
-from typing import Callable, Generic, TypeVar
-
+from typing import Any, Generic, Literal, TypeVar, cast
 
 T = TypeVar("T")
+_F = TypeVar("_F", bound=Callable[..., Any])
 Clock = Callable[[], float]
 
 
@@ -31,7 +32,7 @@ class CircuitBreaker(ContextDecorator, Generic[T]):
         self._before_call()
         return self
 
-    def __exit__(self, exc_type: object, exc: object, traceback: object) -> bool:
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> Literal[False]:
         del traceback
         if exc_type is None:
             self._record_success()
@@ -49,11 +50,11 @@ class CircuitBreaker(ContextDecorator, Generic[T]):
         self._record_success()
         return result
 
-    def __call__(self, func: Callable[..., T]) -> Callable[..., T]:
-        def wrapped(*args: object, **kwargs: object) -> T:
+    def __call__(self, func: _F) -> _F:
+        def wrapped(*args: Any, **kwargs: Any) -> Any:
             return self.call(func, *args, **kwargs)
 
-        return wrapped
+        return cast(_F, wrapped)
 
     def _before_call(self) -> None:
         if self.state != "open":

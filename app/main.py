@@ -19,9 +19,8 @@ from __future__ import annotations
 import hmac
 import logging
 import uuid
-
+from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from typing import AsyncIterator, Callable
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
 
@@ -37,6 +36,7 @@ from app.api_models import (
     SearchResult,
     SourceRef,
 )
+from app.cache import GLOBAL_SCOPE
 from app.channels.base import FeedbackFn
 from app.config import Settings
 from app.deps import build_deps, get_deps, get_settings, provider_names
@@ -78,9 +78,28 @@ def mount_mcp(app: FastAPI, settings: Settings, deps_provider: Callable[[], Pipe
     return mount_mcp_transport(app, settings, deps_provider)
 
 
+def cache_scope_for(payload: AskRequest) -> str:
+    """Partition key for the semantic cache.
+
+    A cache hit skips retrieval, so this is the boundary that decides who can
+    be served someone else's answer. With one shared corpus and no per-user
+    permissions, every caller sees the same documents and a global scope is
+    correct. The moment document-level permissions exist, this must derive
+    from the *authenticated* principal rather than from the request body,
+    which any caller can set.
+    """
+    return payload.user_id or GLOBAL_SCOPE
+
+
 def run_ask(payload: AskRequest, settings: Settings, deps: PipelineDeps) -> AskResponse:
     """Execute the grounded pipeline for one AskRequest."""
-    result = answer_question(payload.question, history=payload.history, settings=settings, deps=deps)
+    result = answer_question(
+        payload.question,
+        history=payload.history,
+        settings=settings,
+        deps=deps,
+        cache_scope=cache_scope_for(payload),
+    )
     sources = [
         SourceRef(
             id=scored.chunk.id,
@@ -180,7 +199,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     """Build dependencies at startup (the index loads here, not at import)."""
     settings: Settings = application.state.settings
     application.state.deps = build_deps(settings)
-    application.state.feedback = FeedbackStore(settings.feedback_db_path)
+    application.state.feedback = FeedbackStore(settings.feedback_db_path, settings.feedback_hmac_key)
     runner: McpRunner | None = getattr(application.state, "mcp_runner", None)
     if runner is None:
         yield
@@ -223,6 +242,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     return application
+
+
+def serve() -> None:
+    """Console entry point for ``citespine-serve`` (uvicorn app.main:app)."""
+    import uvicorn
+
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8000)
 
 
 app = create_app()

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Sequence
+from typing import cast
 
-from app.cache import SemanticCache
+from app.cache import GLOBAL_SCOPE, SemanticCache
 from app.config import Settings
 from app.grounding import get_grounding_judge
 from app.interfaces import Embedder, Generator, GroundingJudge, GroundingResult, Reranker, Retriever
@@ -50,7 +51,7 @@ class _BreakerGenerator:
         self.breaker = breaker
 
     def generate(self, system: str, user: str, max_tokens: int) -> str:
-        return self.breaker.call(self.generator.generate, system, user, max_tokens)
+        return cast(str, self.breaker.call(self.generator.generate, system, user, max_tokens))
 
 
 def answer_question(
@@ -58,14 +59,22 @@ def answer_question(
     history: Sequence[str],
     settings: Settings,
     deps: PipelineDeps,
+    cache_scope: str = GLOBAL_SCOPE,
 ) -> PipelineResult:
+    """Run the grounded pipeline for one question.
+
+    ``cache_scope`` partitions the semantic cache. Any caller serving more
+    than one audience must pass the identity of the asker: a cache hit
+    bypasses retrieval entirely, so the cache, not the retriever, is where a
+    shared answer would cross an authorization boundary.
+    """
     timings: dict[str, float] = {}
     total_start = time.perf_counter()
     guarded_generator = _BreakerGenerator(deps.generator, deps.breaker)
 
     cache_start = time.perf_counter()
-    question_embedding = deps.breaker.call(deps.embedder.embed, [question])[0]
-    cached_answer = deps.cache.get(question_embedding)
+    question_embedding = cast(list[list[float]], deps.breaker.call(deps.embedder.embed, [question]))[0]
+    cached_answer = deps.cache.get(question_embedding, scope=cache_scope)
     timings["cache"] = time.perf_counter() - cache_start
     if cached_answer is not None:
         timings["total"] = time.perf_counter() - total_start
@@ -98,9 +107,9 @@ def answer_question(
     timings["expand"] = time.perf_counter() - expand_start
 
     retrieve_start = time.perf_counter()
-    phrase_embeddings = deps.breaker.call(deps.embedder.embed, phrasings)
+    phrase_embeddings = cast(list[list[float]], deps.breaker.call(deps.embedder.embed, phrasings))
     retrieval_lists: list[list[ScoredChunk]] = []
-    for phrasing, embedding in zip(phrasings, phrase_embeddings):
+    for phrasing, embedding in zip(phrasings, phrase_embeddings, strict=True):
         retrieval_lists.append(deps.retriever.retrieve(phrasing, embedding, settings.rerank_pool))
     merged = reciprocal_rank_fusion(retrieval_lists, settings.rerank_pool)
     timings["retrieve"] = time.perf_counter() - retrieve_start
@@ -129,12 +138,13 @@ def answer_question(
             grounding = judge.judge(answer.text, selected)
             if grounding.score < settings.grounding_min_score:
                 answer = Answer(
-                    text="Low confidence: I could not fully verify this against the retrieved sources.\n\n" + answer.text,
+                    text="Low confidence: I could not fully verify this against the retrieved sources.\n\n"
+                    + answer.text,
                     citations=answer.citations,
                 )
         timings["grounding"] = time.perf_counter() - grounding_start
 
-    deps.cache.set(question_embedding, answer.text)
+    deps.cache.set(question_embedding, answer.text, scope=cache_scope)
     timings["total"] = time.perf_counter() - total_start
     return PipelineResult(
         answer=answer.text,

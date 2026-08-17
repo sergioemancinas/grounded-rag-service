@@ -46,7 +46,9 @@ def provider_names(settings: Settings) -> dict[str, str]:
     def name(hatch: object, fallback: str) -> str:
         if hatch is None:
             return fallback
-        return f"{getattr(hatch, '__module__', type(hatch).__module__)}:{getattr(hatch, '__qualname__', type(hatch).__qualname__)}"
+        module = getattr(hatch, "__module__", type(hatch).__module__)
+        qualname = getattr(hatch, "__qualname__", type(hatch).__qualname__)
+        return f"{module}:{qualname}"
 
     return {
         "embedder": name(settings.embedder_class, settings.embedding_provider),

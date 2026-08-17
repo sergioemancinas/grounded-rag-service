@@ -45,9 +45,7 @@ def verify_signature(public_key: str, signature: str, timestamp: str, body: byte
         from nacl.exceptions import BadSignatureError
         from nacl.signing import VerifyKey
 
-        VerifyKey(bytes.fromhex(public_key)).verify(
-            timestamp.encode() + body, bytes.fromhex(signature)
-        )
+        VerifyKey(bytes.fromhex(public_key)).verify(timestamp.encode() + body, bytes.fromhex(signature))
         return True
     except (BadSignatureError, ValueError):
         return False

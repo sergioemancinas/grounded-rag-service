@@ -18,8 +18,8 @@ the top RERANK_POOL candidates.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import replace
-from typing import Sequence
 
 from app.config import Settings
 from app.retrieval import ScoredChunk
@@ -51,7 +51,7 @@ class CrossEncoderReranker:
         scores = model.predict([(query, scored.chunk.text) for scored in chunks])
         rescored = [
             replace(scored, score=float(score), scores={**scored.scores, "cross_encoder": float(score)})
-            for scored, score in zip(chunks, scores)
+            for scored, score in zip(chunks, scores, strict=True)
         ]
         rescored.sort(key=lambda item: item.score, reverse=True)
         return rescored[:top_k]

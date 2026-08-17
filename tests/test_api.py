@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterator, Sequence
 from pathlib import Path
-from typing import Iterator, Sequence
 
 import pytest
 from fastapi.testclient import TestClient
@@ -28,8 +28,26 @@ def make_settings(tmp_path: Path, **overrides: object) -> Settings:
     ]
     embeddings = embedder.embed(texts)
     chunks = [
-        Chunk("returns:1", "returns", "Returns", ["Return Eligibility"], "https://docs.acme-storefront.example/returns", texts[0], ["/v1/returns"], embeddings[0]),
-        Chunk("orders:1", "orders", "Orders", ["Create Order"], "https://docs.acme-storefront.example/orders", texts[1], ["/v1/orders", "fulfillment_type"], embeddings[1]),
+        Chunk(
+            "returns:1",
+            "returns",
+            "Returns",
+            ["Return Eligibility"],
+            "https://docs.acme-storefront.example/returns",
+            texts[0],
+            ["/v1/returns"],
+            embeddings[0],
+        ),
+        Chunk(
+            "orders:1",
+            "orders",
+            "Orders",
+            ["Create Order"],
+            "https://docs.acme-storefront.example/orders",
+            texts[1],
+            ["/v1/orders", "fulfillment_type"],
+            embeddings[1],
+        ),
     ]
     index_path = tmp_path / "index.jsonl"
     write_index(index_path, chunks)

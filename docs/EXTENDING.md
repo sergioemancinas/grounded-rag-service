@@ -178,6 +178,7 @@ touches them.
 ```python
 AskFn = Callable[[AskRequest], Awaitable[AskResponse]]
 
+
 def create_router(ask: AskFn, settings: Settings) -> APIRouter: ...
 ```
 

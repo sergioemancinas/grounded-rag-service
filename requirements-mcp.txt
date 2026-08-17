@@ -1,3 +1,5 @@
+# Authoritative: pyproject.toml [project.optional-dependencies] mcp
+# Equivalent: pip install -e ".[mcp]"
 -r requirements.txt
 mcp
 PyJWT[crypto]

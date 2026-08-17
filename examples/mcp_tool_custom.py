@@ -16,7 +16,8 @@ Your tools then appear in both the standalone server and the one mounted at
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from app.config import Settings
 from app.pipeline import PipelineDeps

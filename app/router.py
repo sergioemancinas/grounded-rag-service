@@ -13,7 +13,9 @@ class RouterResult:
     reply: str | None = None
 
 
-SMALLTALK_RE = re.compile(r"^\s*(hi|hello|hey|thanks|thank you|good morning|good afternoon|good evening)[!. ]*\s*$", re.IGNORECASE)
+SMALLTALK_RE = re.compile(
+    r"^\s*(hi|hello|hey|thanks|thank you|good morning|good afternoon|good evening)[!. ]*\s*$", re.IGNORECASE
+)
 
 
 def route_intent(question: str, settings: Settings, generator: Generator | None = None) -> RouterResult:
@@ -22,11 +24,15 @@ def route_intent(question: str, settings: Settings, generator: Generator | None 
     if not question.strip():
         return RouterResult(intent="unsupported", reply="Ask a question about the Acme Storefront documentation.")
     if settings.generation_provider == "openai" and generator is not None:
-        label = generator.generate(
-            "Classify the user message as exactly one label: knowledge, smalltalk, unsupported.",
-            question,
-            max_tokens=8,
-        ).strip().lower()
+        label = (
+            generator.generate(
+                "Classify the user message as exactly one label: knowledge, smalltalk, unsupported.",
+                question,
+                max_tokens=8,
+            )
+            .strip()
+            .lower()
+        )
         if label in {"knowledge", "smalltalk", "unsupported"}:
             return RouterResult(intent=label, reply=_canned_reply(label))
     if SMALLTALK_RE.match(question):

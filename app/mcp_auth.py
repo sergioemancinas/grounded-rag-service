@@ -21,8 +21,9 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, Protocol
+from typing import Protocol
 from urllib.parse import urlsplit
 
 WELL_KNOWN_PREFIX = "/.well-known/oauth-protected-resource"
@@ -78,10 +79,7 @@ def build_www_authenticate(
     description: str = "Missing or invalid bearer token",
 ) -> str:
     """``WWW-Authenticate`` value pointing clients at the metadata document."""
-    return (
-        f'Bearer resource_metadata="{resource_metadata_url}", '
-        f'error="{error}", error_description="{description}"'
-    )
+    return f'Bearer resource_metadata="{resource_metadata_url}", error="{error}", error_description="{description}"'
 
 
 class BearerVerifier(Protocol):
@@ -154,7 +152,8 @@ class TokenVerifier:
 
     def _find_key(self, kid: str | None) -> dict[str, object] | None:
         jwks = self._current_jwks()
-        keys = jwks.get("keys", []) if isinstance(jwks, dict) else []
+        keys_raw = jwks.get("keys", []) if isinstance(jwks, dict) else []
+        keys = keys_raw if isinstance(keys_raw, list) else []
         for key in keys:
             if not isinstance(key, dict):
                 continue
@@ -235,9 +234,7 @@ class OAuthResourceMiddleware:
         path = scope.get("path", "")
         if path in self.metadata_paths:
             body = json.dumps(
-                build_protected_resource_metadata(
-                    self.resource_url, self.issuer, sorted(self.required_scopes)
-                )
+                build_protected_resource_metadata(self.resource_url, self.issuer, sorted(self.required_scopes))
             ).encode()
             await _send_response(send, 200, body, [(b"content-type", b"application/json")])
             return

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Iterator
+from collections.abc import Iterator
 from xml.etree import ElementTree
 
 from app.ingest import Document

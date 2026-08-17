@@ -17,11 +17,11 @@ isinstance checks are deliberately avoided.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Protocol, Sequence, TypeVar
+from typing import Protocol, TypeVar
 
 from app.retrieval import ScoredChunk
-
 
 T = TypeVar("T")
 
@@ -111,7 +111,6 @@ def _check(obj: T, *methods: str) -> T:
     missing = [name for name in methods if not callable(getattr(obj, name, None))]
     if missing:
         raise TypeError(
-            f"{type(obj).__name__} does not satisfy the stage protocol: "
-            f"missing callable method(s) {', '.join(missing)}"
+            f"{type(obj).__name__} does not satisfy the stage protocol: missing callable method(s) {', '.join(missing)}"
         )
     return obj

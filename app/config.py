@@ -43,6 +43,9 @@ class Settings(BaseSettings):
 
     index_path: Path = Path("data/index.jsonl")
     feedback_db_path: Path = Path("data/feedback.sqlite3")
+    # Secret keying the feedback digests. Unset derives a random per-process
+    # key: digests stay unlinkable but cannot be compared across restarts.
+    feedback_hmac_key: str = ""
 
     # Prompt overrides: directory of *.md files shadowing app/prompts/
     prompts_dir: Path | None = None
@@ -97,17 +100,9 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _validate_provider_credentials(self) -> Settings:
         """Fail fast at startup on inconsistent provider configuration."""
-        if (
-            self.embedding_provider == "openai"
-            and self.embedder_class is None
-            and not self.openai_api_key
-        ):
+        if self.embedding_provider == "openai" and self.embedder_class is None and not self.openai_api_key:
             raise ValueError("EMBEDDING_PROVIDER=openai requires OPENAI_API_KEY")
-        if (
-            self.generation_provider == "openai"
-            and self.generator_class is None
-            and not self.openai_api_key
-        ):
+        if self.generation_provider == "openai" and self.generator_class is None and not self.openai_api_key:
             raise ValueError("GENERATION_PROVIDER=openai requires OPENAI_API_KEY")
         if self.grounding_judge == "llm" and self.grounding_judge_class is None and not self.openai_api_key:
             raise ValueError("GROUNDING_JUDGE=llm requires OPENAI_API_KEY")

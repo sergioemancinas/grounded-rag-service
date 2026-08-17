@@ -23,7 +23,12 @@ from app.interfaces import _check
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build a JSONL retrieval index from an ingestion source.")
-    parser.add_argument("--docs", type=Path, default=Path("data/sample_docs"), help="Markdown directory for the default source.")
+    parser.add_argument(
+        "--docs",
+        type=Path,
+        default=Path("data/sample_docs"),
+        help="Markdown directory for the default source.",
+    )
     parser.add_argument("--out", type=Path, default=Path("data/index.jsonl"))
     parser.add_argument(
         "--source",

@@ -27,8 +27,9 @@ the client-side ``AskFn`` that proves the two paths are interchangeable.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from app.api_models import AskFn, AskRequest, AskResponse, FeedbackRequest
 

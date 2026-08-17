@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import httpx
 
-from app.api_models import AskRequest, AskResponse
+from app.api_models import AskFn, AskRequest, AskResponse
 
 
-def remote_ask(base_url: str, token: str = "", timeout: float = 60.0):
+def remote_ask(base_url: str, token: str = "", timeout: float = 60.0) -> AskFn:
     """Build an ``AskFn`` that calls a citespine service at ``base_url``.
 
     ``token`` is the optional static bearer configured with ``API_AUTH_TOKEN``

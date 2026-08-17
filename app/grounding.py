@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Sequence
+from collections.abc import Sequence
 
 from app.config import Settings
 from app.interfaces import GroundingJudge, GroundingResult
 from app.prompts import load_prompt
 from app.registry import GROUNDING_JUDGES, register_grounding_judge, resolve
 from app.retrieval import ScoredChunk, tokenize
-
 
 __all__ = [
     "GroundingJudge",

@@ -10,17 +10,16 @@ literal ``{``/``}`` in prompts (JSON examples) never break and unknown
 
 from __future__ import annotations
 
-from functools import lru_cache
+from functools import cache
 from pathlib import Path
 from string import Template
 
 from app.config import Settings
 
-
 _PACKAGED_DIR = Path(__file__).resolve().parent / "prompts"
 
 
-@lru_cache(maxsize=None)
+@cache
 def _read_prompt(name: str, override_dir: str | None) -> str:
     if override_dir:
         candidate = Path(override_dir) / f"{name}.md"

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from app.cache import SemanticCache
 from app.config import Settings
@@ -10,7 +10,7 @@ from app.pipeline import PipelineDeps, answer_question
 from app.providers import LocalExtractiveGenerator, LocalHashEmbedder
 from app.rerank import PassthroughReranker
 from app.resilience import CircuitBreaker
-from app.retrieval import Chunk, ScoredChunk, Retriever
+from app.retrieval import Chunk, Retriever, ScoredChunk
 from tests.conftest import write_index
 
 
@@ -32,7 +32,16 @@ def test_pipeline_offline_end_to_end(tmp_path: Path) -> None:
     embeddings = embedder.embed(texts)
     chunks = [
         Chunk("returns:1", "returns", "Returns", ["Return Eligibility"], "", texts[0], ["/v1/returns"], embeddings[0]),
-        Chunk("orders:1", "orders", "Orders", ["Create Order"], "", texts[1], ["/v1/orders", "fulfillment_type"], embeddings[1]),
+        Chunk(
+            "orders:1",
+            "orders",
+            "Orders",
+            ["Create Order"],
+            "",
+            texts[1],
+            ["/v1/orders", "fulfillment_type"],
+            embeddings[1],
+        ),
     ]
     index_path = tmp_path / "index.jsonl"
     write_index(index_path, chunks)

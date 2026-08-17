@@ -8,3 +8,5 @@ __pycache__/
 data/index.jsonl
 data/feedback.sqlite3
 data/cache.json
+data/benchmarks/
+.claude/

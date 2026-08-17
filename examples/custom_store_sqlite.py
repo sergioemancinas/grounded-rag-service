@@ -22,8 +22,8 @@ import json
 import os
 import sqlite3
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from app.config import Settings
 from app.retrieval import Chunk, ScoredChunk, cosine_similarity
@@ -59,8 +59,7 @@ class SqliteRetriever:
     def retrieve(self, query: str, query_embedding: Sequence[float], k: int) -> list[ScoredChunk]:
         """Return the ``k`` chunks closest to the query embedding."""
         scored = [
-            ScoredChunk(chunk=chunk, score=cosine_similarity(query_embedding, chunk.embedding))
-            for chunk in self.chunks
+            ScoredChunk(chunk=chunk, score=cosine_similarity(query_embedding, chunk.embedding)) for chunk in self.chunks
         ]
         scored.sort(key=lambda item: item.score, reverse=True)
         return scored[:k]

@@ -10,14 +10,14 @@ chunking with a small overlap.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Protocol
+from typing import Any, Protocol
 
 from app.config import Settings
 from app.providers import get_embedder
 from app.retrieval import extract_identifiers
-
 
 HEADING_RE = re.compile(r"^(#{1,3})\s+(.+?)\s*$")
 
@@ -167,7 +167,7 @@ def build_records(source: Source, settings: Settings) -> list[dict[str, object]]
     texts = [document.text for document in documents]
     embeddings = embedder.embed(texts) if texts else []
     records: list[dict[str, object]] = []
-    for document, embedding in zip(documents, embeddings):
+    for document, embedding in zip(documents, embeddings, strict=True):
         records.append(
             {
                 "id": document.id,

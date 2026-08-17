@@ -19,8 +19,9 @@ from __future__ import annotations
 
 import importlib
 import logging
+from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
-from typing import Any, Callable
+from typing import Any
 
 from app.config import Settings
 from app.mcp_auth import (
@@ -76,8 +77,7 @@ def _import_mcp_server_class() -> Any:
         return FastMCP
     except ImportError as error:
         raise RuntimeError(
-            "The MCP server requires the 'mcp' package. "
-            "Install it with: pip install -r requirements-mcp.txt"
+            "The MCP server requires the 'mcp' package. Install it with: pip install -r requirements-mcp.txt"
         ) from error
 
 
@@ -234,9 +234,7 @@ def mount(
     application.mount("/mcp", _ExactMountPath(guarded))
 
     if settings.mcp_auth_mode == "jwt":
-        metadata = build_protected_resource_metadata(
-            canonical, settings.mcp_auth_issuer, sorted(settings.mcp_scopes)
-        )
+        metadata = build_protected_resource_metadata(canonical, settings.mcp_auth_issuer, sorted(settings.mcp_scopes))
         for path in well_known_paths(canonical):
             application.add_route(
                 path,

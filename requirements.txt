@@ -1,3 +1,6 @@
+# Authoritative dependency declarations live in pyproject.toml ([project] dependencies).
+# This file is a convenience shim for Docker and classic `pip install -r` workflows.
+# Equivalent: pip install .
 fastapi
 uvicorn
 pydantic

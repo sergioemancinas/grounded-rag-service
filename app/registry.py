@@ -18,10 +18,10 @@ Selection order in :func:`resolve`:
 from __future__ import annotations
 
 import inspect
-from typing import Any, Callable
+from collections.abc import Callable, Mapping
+from typing import Any
 
 from app.config import Settings
-
 
 Factory = Callable[[Settings], Any]
 
@@ -81,7 +81,7 @@ def resolve(
     """
     if hatch is not None:
         try:
-            parameters = inspect.signature(hatch).parameters
+            parameters: Mapping[str, Any] = inspect.signature(hatch).parameters
         except (TypeError, ValueError):
             parameters = {}
         if parameters:
