@@ -22,9 +22,35 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Protocol
 from urllib.parse import urlsplit
+
+CURRENT_CLAIMS: ContextVar[dict | None] = ContextVar("citespine_mcp_claims", default=None)
+"""Claims of the verified token for the request being served, if any.
+
+Tools need the caller's identity for two things the transport cannot do for
+them: scoping anything cached per caller, and attributing a tool invocation
+in an audit trail. A context variable keeps that out of every tool signature
+and is copied into the worker thread when a synchronous tool runs.
+"""
+
+
+def current_claims() -> dict | None:
+    """Verified token claims for the in-flight MCP request, or None."""
+    return CURRENT_CLAIMS.get()
+
+
+def current_subject() -> str:
+    """Stable caller identity for the in-flight MCP request.
+
+    Returns the token's ``sub``, or an empty string when the server runs
+    unauthenticated, in which case callers are genuinely indistinguishable.
+    """
+    claims = CURRENT_CLAIMS.get() or {}
+    return str(claims.get("sub", ""))
+
 
 WELL_KNOWN_PREFIX = "/.well-known/oauth-protected-resource"
 WELL_KNOWN_PATH = WELL_KNOWN_PREFIX
@@ -250,7 +276,11 @@ class OAuthResourceMiddleware:
                 f"Token is missing required scopes: {' '.join(sorted(self.required_scopes))}",
             )
             return
-        await self.app(scope, receive, send)
+        token = CURRENT_CLAIMS.set(claims)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            CURRENT_CLAIMS.reset(token)
 
     async def _challenge(self, send: Callable, status: int, error: str, description: str) -> None:
         metadata_url = f"{self.resource_url.rstrip('/')}"

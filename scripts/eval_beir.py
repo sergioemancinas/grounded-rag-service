@@ -2,27 +2,32 @@
 """Public BEIR retrieval benchmark for citespine's lexical / dense / hybrid lanes.
 
 Downloads and caches datasets under data/benchmarks/. Stdlib only for I/O;
-retrieval uses this repo's tokenize / BM25 / LocalHashEmbedder / cosine /
-RRF implementations. Does not exercise generation or the grounding gate.
+retrieval uses this repo's tokenize / BM25 / Embedder / cosine / RRF
+implementations. Does not exercise generation or the grounding gate.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import importlib
+import inspect
 import json
 import math
+import re
 import statistics
 import sys
 import urllib.request
 import zipfile
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.config import Settings
+from app.interfaces import Embedder
 from app.providers import LocalHashEmbedder
 from app.retrieval import Retriever, reciprocal_rank_fusion
 
@@ -33,6 +38,7 @@ CANDIDATE_POOL = 100
 RRF_CONSTANT = 60
 METRIC_K = 10
 DEFAULT_CACHE_ROOT = Path("data/benchmarks")
+EMBED_BATCH_SIZE = 64
 
 
 def dcg_at_k(gains: Sequence[float], k: int) -> float:
@@ -96,6 +102,14 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_CACHE_ROOT,
         help="Directory for downloaded BEIR archives and unpacked corpora.",
     )
+    parser.add_argument(
+        "--embedder",
+        default="local",
+        help=(
+            "Embedder for dense/hybrid lanes: 'local' (default, LocalHashEmbedder, no extra deps) "
+            "or a dotted path module:Class (same hatch style as EMBEDDER_CLASS / app.registry)."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -112,6 +126,38 @@ def normalize_lane(name: str) -> str:
     if key not in aliases:
         raise SystemExit(f"Unknown lane {name!r}; expected bm25, dense, or hybrid")
     return aliases[key]
+
+
+def resolve_embedder(spec: str) -> Embedder:
+    """Resolve ``local`` or a dotted-path hatch the same way ``app.registry.resolve`` does."""
+    if spec == "local":
+        return LocalHashEmbedder()
+
+    module_name, separator, attribute = spec.partition(":")
+    if not separator:
+        module_name, _, attribute = spec.rpartition(".")
+    if not module_name or not attribute:
+        raise SystemExit(f"Invalid embedder spec {spec!r}; expected 'local' or 'module:Class'")
+
+    hatch: Any = getattr(importlib.import_module(module_name), attribute)
+    try:
+        parameters: Mapping[str, Any] = inspect.signature(hatch).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+    if parameters:
+        return hatch(Settings())
+    return hatch()
+
+
+def embedder_cache_slug(embedder: object) -> str:
+    """Filesystem-safe key from embedder class name plus model name (or dimensions)."""
+    name = type(embedder).__name__
+    model = getattr(embedder, "model_name", None)
+    if model is None:
+        dimensions = getattr(embedder, "dimensions", None)
+        model = f"dims{dimensions}" if dimensions is not None else "default"
+    raw = f"{name}__{model}"
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", raw)
 
 
 def ensure_dataset(name: str, cache_dir: Path) -> Path:
@@ -174,11 +220,62 @@ def document_text(title: str, text: str) -> str:
     return title or text
 
 
-def build_retriever(corpus: Sequence[dict[str, object]], index_path: Path) -> Retriever:
+def load_cached_embeddings(path: Path, expected_ids: Sequence[str]) -> list[list[float]] | None:
+    """Load corpus embeddings from disk if they match *expected_ids* in order."""
+    if not path.exists():
+        return None
+    rows = read_jsonl(path)
+    if len(rows) != len(expected_ids):
+        return None
+    embeddings: list[list[float]] = []
+    for row, expected_id in zip(rows, expected_ids, strict=True):
+        if str(row.get("_id", "")) != expected_id:
+            return None
+        embedding = row.get("embedding")
+        if not isinstance(embedding, list) or not embedding:
+            return None
+        embeddings.append([float(value) for value in embedding])
+    return embeddings
+
+
+def write_cached_embeddings(path: Path, doc_ids: Sequence[str], embeddings: Sequence[Sequence[float]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for doc_id, embedding in zip(doc_ids, embeddings, strict=True):
+            handle.write(json.dumps({"_id": doc_id, "embedding": list(embedding)}) + "\n")
+
+
+def embed_corpus(embedder: Embedder, texts: Sequence[str]) -> list[list[float]]:
+    """Embed the corpus in batches so progress is visible on CPU runs."""
+    embeddings: list[list[float]] = []
+    total = len(texts)
+    for start in range(0, total, EMBED_BATCH_SIZE):
+        batch = list(texts[start : start + EMBED_BATCH_SIZE])
+        embeddings.extend(embedder.embed(batch))
+        done = min(start + EMBED_BATCH_SIZE, total)
+        if done % 512 == 0 or done == total:
+            print(f"  embedded {done}/{total} documents", flush=True)
+    return embeddings
+
+
+def build_retriever(
+    corpus: Sequence[dict[str, object]],
+    index_path: Path,
+    embedder: Embedder,
+    embeddings_path: Path,
+) -> Retriever:
     """Materialize one Chunk per BEIR document and load a BM25+dense Retriever."""
-    embedder = LocalHashEmbedder()
     texts = [document_text(str(row.get("title", "")), str(row.get("text", ""))) for row in corpus]
-    embeddings = embedder.embed(texts)
+    doc_ids = [str(row["_id"]) for row in corpus]
+
+    embeddings = load_cached_embeddings(embeddings_path, doc_ids)
+    if embeddings is None:
+        print(f"Embedding {len(texts)} documents with {type(embedder).__name__} -> {embeddings_path}")
+        embeddings = embed_corpus(embedder, texts)
+        write_cached_embeddings(embeddings_path, doc_ids, embeddings)
+    else:
+        print(f"Loaded cached embeddings from {embeddings_path}")
+
     index_path.parent.mkdir(parents=True, exist_ok=True)
     with index_path.open("w", encoding="utf-8") as handle:
         for row, text, embedding in zip(corpus, texts, embeddings, strict=True):
@@ -206,7 +303,7 @@ def build_retriever(corpus: Sequence[dict[str, object]], index_path: Path) -> Re
     return Retriever(index_path, settings)
 
 
-def rank_lane(retriever: Retriever, embedder: LocalHashEmbedder, query: str, lane: str) -> list[str]:
+def rank_lane(retriever: Retriever, embedder: Embedder, query: str, lane: str) -> list[str]:
     """Return ranked document ids for one lane using the repo retrieval primitives."""
     if lane == "bm25":
         ranked = retriever._lexical_rank(query, CANDIDATE_POOL)
@@ -233,12 +330,12 @@ def mean_or_zero(values: Sequence[float]) -> float:
 
 def evaluate_lanes(
     retriever: Retriever,
+    embedder: Embedder,
     queries: Sequence[dict[str, object]],
     qrels: dict[str, dict[str, float]],
     lanes: Sequence[str],
     limit: int | None,
 ) -> dict[str, dict[str, float]]:
-    embedder = LocalHashEmbedder()
     selected_queries = [row for row in queries if str(row["_id"]) in qrels]
     selected_queries.sort(key=lambda row: str(row["_id"]))
     if limit is not None:
@@ -258,7 +355,7 @@ def evaluate_lanes(
             metrics[lane]["recall@10"].append(recall_at_k(ranked_ids, labels, METRIC_K))
             metrics[lane]["mrr@10"].append(mrr_at_k(ranked_ids, labels, METRIC_K))
         if index % 50 == 0 or index == len(selected_queries):
-            print(f"  scored {index}/{len(selected_queries)} queries")
+            print(f"  scored {index}/{len(selected_queries)} queries", flush=True)
 
     return {
         lane: {
@@ -281,16 +378,21 @@ def main() -> None:
     if not lanes:
         raise SystemExit("At least one lane is required")
 
+    embedder = resolve_embedder(args.embedder)
+    slug = embedder_cache_slug(embedder)
+
     dataset_dir = ensure_dataset(args.dataset, args.cache_dir)
     corpus = read_jsonl(dataset_dir / "corpus.jsonl")
     queries = read_jsonl(dataset_dir / "queries.jsonl")
     qrels = load_qrels(dataset_dir / "qrels" / "test.tsv")
 
-    index_path = args.cache_dir / args.dataset / "citespine_index.jsonl"
+    index_path = args.cache_dir / args.dataset / f"citespine_index__{slug}.jsonl"
+    embeddings_path = args.cache_dir / args.dataset / f"embeddings__{slug}.jsonl"
     print(f"Building index for {len(corpus)} documents -> {index_path}")
-    retriever = build_retriever(corpus, index_path)
+    print(f"Embedder={args.embedder} cache_key={slug}")
+    retriever = build_retriever(corpus, index_path, embedder, embeddings_path)
     print(f"Evaluating lanes={','.join(lanes)} on {args.dataset}")
-    results = evaluate_lanes(retriever, queries, qrels, lanes, args.limit)
+    results = evaluate_lanes(retriever, embedder, queries, qrels, lanes, args.limit)
 
     print()
     print(f"{'lane':<12} {'nDCG@10':>10} {'Recall@10':>10} {'MRR@10':>10}")
@@ -302,6 +404,8 @@ def main() -> None:
     if args.json is not None:
         payload = {
             "dataset": args.dataset,
+            "embedder": args.embedder,
+            "embedder_cache_key": slug,
             "candidate_pool": CANDIDATE_POOL,
             "rrf_constant": RRF_CONSTANT,
             "lanes": {format_lane_label(lane): results[lane] for lane in lanes},

@@ -60,26 +60,45 @@ python -m pytest                                        # full suite, offline
 ## Results
 
 Measured on [BEIR SciFact](https://arxiv.org/abs/2104.08663) (300 test
-queries, 5,183 documents) with this repo's own retrieval code. Reproduce with
-`python scripts/eval_beir.py --lanes bm25,dense,hybrid`.
+queries, 5,183 documents) with this repo's own retrieval code.
+
+**Offline default** (`LocalHashEmbedder`, no extra deps):
+
+```bash
+python scripts/eval_beir.py --lanes bm25,dense,hybrid
+```
 
 | Lane | nDCG@10 | Recall@10 | MRR@10 |
 | --- | --- | --- | --- |
 | BM25 only | **0.6047** | 0.7262 | 0.5697 |
-| Dense only (offline default embedder) | 0.1557 | 0.2381 | 0.1322 |
-| Hybrid, RRF | 0.3756 | 0.5361 | 0.3322 |
+| Dense only (LocalHashEmbedder) | 0.1557 | 0.2381 | 0.1322 |
+| Hybrid, RRF (LocalHashEmbedder) | 0.3756 | 0.5361 | 0.3322 |
+
+**Real embedder** (`BAAI/bge-small-en-v1.5` via fastembed):
+
+```bash
+pip install -e ".[eval]"
+python scripts/eval_beir.py --lanes bm25,dense,hybrid \
+  --embedder examples.custom_embedder_fastembed:FastEmbedEmbedder
+```
+
+| Lane | nDCG@10 | Recall@10 | MRR@10 |
+| --- | --- | --- | --- |
+| BM25 only | 0.6047 | 0.7262 | 0.5697 |
+| Dense only (bge-small-en-v1.5) | **0.7200** | 0.8452 | 0.6845 |
+| Hybrid, RRF (bge-small-en-v1.5) | 0.6783 | 0.7783 | 0.6528 |
 
 Published BEIR reference for SciFact BM25 is nDCG@10 0.665, from a different
 implementation (Elasticsearch, multi-field). Shown for orientation; this is
 not a reproduction of it.
 
-**Read that table honestly: hybrid retrieval is 38% worse than BM25 alone in
-the default configuration.** The fusion is not at fault; the offline default
-embedder is. `LocalHashEmbedder` is a hashing trick that makes the
-zero-credential quickstart possible and carries almost no semantic signal
-(0.1557 standalone), so RRF blends a strong lane with a near-random one.
-Hybrid retrieval is the right design *with a real embedding model behind the
-dense lane*, and the numbers above are what it costs without one.
+**Read both tables honestly.** With the offline hash embedder, hybrid is 38%
+worse than BM25 alone (0.3756 vs 0.6047): RRF blends a strong lexical lane
+with a near-random dense lane (0.1557 standalone). With
+`BAAI/bge-small-en-v1.5`, hybrid beats BM25 (0.6783 vs 0.6047) but still
+trails dense-only (0.7200): the same untuned RRF constant 60 now mixes a
+stronger dense lane with a weaker lexical one. No fusion parameters were
+tuned against this split.
 
 This is also why the bundled fictional corpus is a smoke test rather than an
 evaluation: three documents cannot expose a regression that a public
@@ -157,7 +176,7 @@ Full recipes: [docs/EXTENDING.md](docs/EXTENDING.md). Design rationale: [docs/AR
 
 ## Design notes
 
-**Hybrid retrieval**, because real questions contain identifiers. Dense vectors capture "how do I send an order back", lexical matching captures `fulfillment_type` and `POST /v1/orders`, and only one of those is a paraphrase problem. Exact identifier matches are force-injected into the candidate pool so precise API questions cannot be ranked away. The measured caveat is above: this holds only when the dense lane runs a real embedding model, and the benchmark shows what it costs when it does not.
+**Hybrid retrieval**, because real questions contain identifiers. Dense vectors capture "how do I send an order back", lexical matching captures `fulfillment_type` and `POST /v1/orders`, and only one of those is a paraphrase problem. Exact identifier matches are force-injected into the candidate pool so precise API questions cannot be ranked away. The measured caveat is above: with a real embedder hybrid beats BM25 on SciFact but does not beat dense alone under the default RRF settings; with the offline hash embedder it is a clear regression.
 
 **RRF over score mixing**, because a cosine similarity and a BM25 score are not on a shared scale. Fusing by rank sidesteps the tuning problem that weighted score mixing creates.
 

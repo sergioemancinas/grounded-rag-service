@@ -17,9 +17,12 @@ published baselines, so the numbers can be checked by anyone and can go down.
 ## Results
 
 BEIR SciFact, 300 test queries, 5,183 documents. Measured with the repo's own
-`tokenize`, BM25 (k1=1.2, b=0.75), `LocalHashEmbedder`, `cosine_similarity`,
-and `reciprocal_rank_fusion` (constant 60), candidate pool 100 per lane.
-Reproduce with:
+`tokenize`, BM25 (k1=1.2, b=0.75), `cosine_similarity`, and
+`reciprocal_rank_fusion` (constant 60), candidate pool 100 per lane. Two
+embedders are reported side by side: the offline default and a real ONNX
+model. BM25 is identical in both tables (lexical only).
+
+### Offline default (`LocalHashEmbedder`)
 
 ```bash
 python scripts/eval_beir.py --lanes bm25,dense,hybrid
@@ -31,6 +34,23 @@ python scripts/eval_beir.py --lanes bm25,dense,hybrid
 | `dense_only` | 0.1557 | 0.2381 | 0.1322 | — |
 | `hybrid_rrf` | 0.3756 | 0.5361 | 0.3322 | — |
 
+### Real embedder (`BAAI/bge-small-en-v1.5` via fastembed)
+
+```bash
+pip install -e ".[eval]"
+python scripts/eval_beir.py --lanes bm25,dense,hybrid \
+  --embedder examples.custom_embedder_fastembed:FastEmbedEmbedder
+```
+
+Corpus embeddings are cached under `data/benchmarks/` keyed by embedder class
+and model name so a rerun does not re-embed 5,183 documents.
+
+| Lane | nDCG@10 | Recall@10 | MRR@10 | Published BM25 reference |
+| --- | --- | --- | --- | --- |
+| `bm25_only` | 0.6047 | 0.7262 | 0.5697 | 0.665 |
+| `dense_only` | **0.7200** | 0.8452 | 0.6845 | — |
+| `hybrid_rrf` | 0.6783 | 0.7783 | 0.6528 | — |
+
 The published reference is SciFact BM25 nDCG@10 = 0.665 from Table 2 of
 [Thakur et al., BEIR (NeurIPS 2021)](https://arxiv.org/abs/2104.08663). It is
 a **different implementation** (Elasticsearch, separate title and text
@@ -38,7 +58,7 @@ fields) and is shown for orientation only. This is not a reproduction of that
 number, and the ~0.06 gap is consistent with single-field indexing and a
 simpler tokenizer.
 
-## The finding: hybrid retrieval is a regression here
+## The finding: hybrid quality is an embedder property
 
 With the default offline configuration, fusing the dense lane into BM25 makes
 retrieval **substantially worse**: 0.3756 against 0.6047, a 38% relative drop
@@ -52,22 +72,26 @@ nDCG@10 of 0.1557 is the direct measurement of that. Reciprocal rank fusion
 then does exactly what it is designed to do: it lets a lane with real signal
 be pulled down by a lane with almost none.
 
+With `BAAI/bge-small-en-v1.5` (same RRF constant 60, no parameter tuning on
+this split), the picture reverses against BM25 and stays honest about dense:
+
+- Dense alone reaches **0.7200** nDCG@10.
+- Hybrid reaches **0.6783**, beating BM25 (0.6047) by about 12% relative, but
+  still trailing dense-only. RRF is again doing its job: it blends a stronger
+  dense ranking with a weaker lexical one, so the fused list sits between
+  them rather than above both.
+
 Two honest consequences:
 
 1. **The README's architectural claim needs a qualifier.** Hybrid retrieval
-   is the right design *when the dense lane uses a real embedding model*.
-   With the offline default it is a net negative, and the repo says so rather
-   than quoting an aggregate number that hides it.
+   is the right design *when the dense lane uses a real embedding model* and
+   you care about identifier-heavy queries that pure dense can miss. On this
+   SciFact split, untuned RRF hybrid beats BM25 and loses to dense alone; with
+   the offline default it is a net negative. The repo publishes both
+   measurements rather than quoting only the flattering one.
 2. **This is why the fictional corpus was abandoned as an evaluation.** Three
    documents cannot expose a 38% retrieval regression. A public benchmark
    found it in one run.
-
-If you plug in a real embedder (see
-[`examples/custom_embedder_fastembed.py`](../examples/custom_embedder_fastembed.py))
-the dense and hybrid rows should improve substantially. That measurement is
-not published here because it is not yet run in this repository, and
-reporting an unrun number would be exactly the problem this document exists
-to avoid.
 
 ## What is gated in CI
 
@@ -77,7 +101,9 @@ stdlib scoring, no model download, no API key, no LLM judge, so it cannot
 flap. Metrics are uploaded as a build artifact.
 
 Dense and hybrid lanes are not gated, because their scores are a property of
-whichever embedder is configured rather than of the retrieval code.
+whichever embedder is configured rather than of the retrieval code. The
+fastembed numbers above require the optional `eval` extra
+(`pip install -e ".[eval]"`).
 
 ## Metrics
 
@@ -128,12 +154,14 @@ These matter as much as the numbers.
   tautology, not a measurement.
 - **Cross-implementation comparison is orientation, not reproduction.** See
   the note under the results table.
+- **Untuned fusion.** RRF constant 60 is the common default, chosen before
+  seeing the fastembed numbers. Retuning it on this test split would be a
+  separate labelled experiment.
 
 ## What would strengthen this
 
-In rough order of value: a second licence-clean dataset; a real embedding
-model behind an `eval` extra so the dense and hybrid rows measure the design
-rather than the placeholder; and a citation-attribution metric checking that
-each `[n]` marker points at a chunk that actually supports its sentence,
-which needs an LLM judge and therefore belongs in a scheduled run publishing
-a dated artifact, not in the CI gate.
+In rough order of value: a second licence-clean dataset; a citation-attribution
+metric checking that each `[n]` marker points at a chunk that actually
+supports its sentence, which needs an LLM judge and therefore belongs in a
+scheduled run publishing a dated artifact, not in the CI gate; and a labelled
+fusion-parameter study that discloses any post-hoc choice of RRF constant.

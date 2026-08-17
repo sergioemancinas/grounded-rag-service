@@ -23,12 +23,14 @@ from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from typing import Any
 
+from app.cache import GLOBAL_SCOPE
 from app.config import Settings
 from app.mcp_auth import (
     OAuthResourceMiddleware,
     TokenVerifier,
     build_protected_resource_metadata,
     canonical_resource_url,
+    current_subject,
     well_known_paths,
 )
 from app.pipeline import PipelineDeps, answer_question
@@ -136,7 +138,20 @@ def build_mcp_server(settings: Settings, deps_provider: Callable[[], PipelineDep
     def ask(question: str) -> dict[str, object]:
         """Run the full grounded pipeline and return a cited answer."""
         deps = deps_provider()
-        result = answer_question(question, history=[], settings=settings, deps=deps)
+        # Scope the answer cache to the authenticated caller. Without this,
+        # every MCP client shares one cache partition, which is the exact
+        # boundary the cache scoping exists to hold: a cache hit never
+        # reaches the retriever, so retrieval-time authorization would be
+        # skipped entirely. Unauthenticated servers fall back to the shared
+        # scope, where callers are genuinely indistinguishable anyway.
+        subject = current_subject()
+        result = answer_question(
+            question,
+            history=[],
+            settings=settings,
+            deps=deps,
+            cache_scope=f"mcp:{subject}" if subject else GLOBAL_SCOPE,
+        )
         return {
             "answer": result.answer,
             "citations": result.citations,

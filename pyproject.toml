@@ -24,8 +24,10 @@ dev = ["pytest", "ruff", "mypy"]
 mcp = ["mcp", "PyJWT[crypto]"]
 # Slack adapter needs only httpx (already a core dep); group kept explicit and deletable.
 slack = []
-# scripts/eval_golden.py uses only core deps today; group reserved for eval extras.
-eval = []
+# Real-embedder BEIR runs (scripts/eval_beir.py --embedder …). ONNX/CPU, no torch.
+# numpy upper bound: 2.3+ ships stubs that use 3.12 `type` statements, which
+# break `mypy app` under python_version = 3.11 once openai follows the import.
+eval = ["fastembed", "numpy>=1.26,<2.3"]
 
 [project.scripts]
 citespine-serve = "app.main:serve"
