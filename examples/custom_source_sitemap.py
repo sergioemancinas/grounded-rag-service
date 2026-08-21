@@ -25,7 +25,7 @@ from xml.etree import ElementTree
 
 from app.ingest import Document
 
-USER_AGENT = "citespine-example-crawler/1.0"
+USER_AGENT = "grounded-rag-example-crawler/1.0"
 REQUEST_DELAY_SECONDS = 1.0
 
 

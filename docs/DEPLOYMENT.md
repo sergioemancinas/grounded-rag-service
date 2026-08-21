@@ -3,8 +3,8 @@
 ## Docker
 
 ```bash
-docker build -t citespine .
-docker run --env-file .env -p 8000:8000 citespine
+docker build -t grounded-rag-service .
+docker run --env-file .env -p 8000:8000 grounded-rag-service
 ```
 
 The image builds the index from `data/sample_docs` at build time, so the
@@ -71,7 +71,7 @@ the index does not match its manifest. Write access to `data/` is equivalent
 to control over every answer the service gives, so treat the index as code
 and rebuild it in CI rather than editing it in place.
 
-Ship the `citespine.audit` logger somewhere durable. It emits one structured
+Ship the `grounded_rag.audit` logger somewhere durable. It emits one structured
 JSON event per MCP tool call with the caller subject and outcome, which is
 what makes an incident reconstructable; kept only in a container's stdout it
 disappears with the container.
@@ -103,7 +103,7 @@ are the semantic cache, then `RERANK_POOL`, then a smaller expansion model.
 
 This is a template. The rename checklist:
 
-1. `citespine` appears in `README.md`, `Dockerfile`, `app/main.py`
+1. `grounded-rag-service` appears in `README.md`, `Dockerfile`, `app/main.py`
    (the FastAPI title), and the loggers in `app/main.py`,
    `app/channels/slack.py`, `app/mcp_server.py`. Replace all of them.
 2. Replace `data/sample_docs/` with your corpus and rebuild the index.

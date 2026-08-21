@@ -2,7 +2,7 @@
 
 ## Scope and method
 
-This models **citespine as deployed**: the HTTP core, the optional channel
+This models **grounded-rag-service as deployed**: the HTTP core, the optional channel
 adapter, the optional MCP server, and the data they touch. It covers the
 software in this repository and the trust boundaries it creates. It does not
 model the security of whatever LLM provider, identity provider, or host you
@@ -45,7 +45,7 @@ flowchart LR
     llm[LLM and embedding provider]
   end
 
-  subgraph proc["citespine process"]
+  subgraph proc["grounded-rag-service process"]
     adapter[Channel adapter]
     core[Core RAG API service]
     mcps[MCP server]
@@ -193,7 +193,7 @@ Applies only when the MCP server is enabled.
 | MCP05 Command Injection | Mitigated | No model-supplied argument reaches a shell, a file path, or string-concatenated SQL. `fetch(id)` is an in-memory lookup; the feedback store uses parameterized queries. |
 | MCP06 Intent Flow Subversion | Partial, unverified | Same underlying issue as LLM01, and the same lack of test evidence. |
 | MCP07 Insufficient AuthN/AuthZ | Mitigated when enabled, **absent by default** | Full resource-server validation with the canonical-URL rule; missing scope returns 403 rather than 401. `MCP_AUTH_MODE` defaults to `off`, which is correct for a local demo and wrong for anything reachable. |
-| MCP08 Lack of Audit and Telemetry | Mitigated | Every tool call emits a structured JSON event on the `citespine.audit` logger: caller subject, tool name, per-argument length and keyed digest, outcome, error class on failure, and duration. Raw question text, secrets, and bearer tokens are never logged, which is asserted by a test rather than promised by a comment. Extension tools registered through `MCP_EXTENSIONS_MODULE` are covered too, because the audit wrapper is installed on `server.tool` itself. Shipping those events to tamper-resistant storage is a deployment concern. |
+| MCP08 Lack of Audit and Telemetry | Mitigated | Every tool call emits a structured JSON event on the `grounded_rag.audit` logger: caller subject, tool name, per-argument length and keyed digest, outcome, error class on failure, and duration. Raw question text, secrets, and bearer tokens are never logged, which is asserted by a test rather than promised by a comment. Extension tools registered through `MCP_EXTENSIONS_MODULE` are covered too, because the audit wrapper is installed on `server.tool` itself. Shipping those events to tamper-resistant storage is a deployment concern. |
 | MCP09 Shadow MCP Servers | Out of scope | Organizational control, not a property of this software. |
 | MCP10 Context Injection and Over-Sharing | Mitigated | Answer cache is partitioned by the verified token subject, so one caller's answer cannot be served to another; no conversation state persists server-side (`history` is client-held, which keeps the core stateless). Covered by `tests/test_mcp_identity.py`, including that claims do not leak between requests. |
 

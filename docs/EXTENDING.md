@@ -1,4 +1,4 @@
-# Extending citespine
+# Extending grounded-rag-service
 
 Every recipe below should take **under 30 minutes from clone to running**. If
 one of them takes longer, that is a bug in this document or in the seam it

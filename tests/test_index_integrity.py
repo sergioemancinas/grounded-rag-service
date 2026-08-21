@@ -98,7 +98,7 @@ def test_warn_mode_logs_and_continues(tmp_path: Path, caplog: pytest.LogCaptureF
         built_at="2026-08-17T12:00:00Z",
     )
     index_path.write_bytes(index_path.read_bytes() + b"\n")
-    with caplog.at_level(logging.WARNING, logger="citespine.retrieval"):
+    with caplog.at_level(logging.WARNING, logger="grounded_rag.retrieval"):
         retriever = Retriever(index_path, settings.model_copy(update={"index_verify": "warn"}))
     assert any("digest mismatch" in record.getMessage() for record in caplog.records)
     assert retriever.chunk_count >= 1
@@ -106,7 +106,7 @@ def test_warn_mode_logs_and_continues(tmp_path: Path, caplog: pytest.LogCaptureF
 
 def test_absent_manifest_is_tolerated(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     index_path, settings, _source_id = _write_tiny_index(tmp_path)
-    with caplog.at_level(logging.WARNING, logger="citespine.retrieval"):
+    with caplog.at_level(logging.WARNING, logger="grounded_rag.retrieval"):
         retriever = Retriever(index_path, settings.model_copy(update={"index_verify": "warn"}))
     assert retriever.chunk_count >= 1
     assert any("unverified" in record.getMessage() for record in caplog.records)

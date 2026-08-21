@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 from urllib.parse import urlsplit
 
-CURRENT_CLAIMS: ContextVar[dict | None] = ContextVar("citespine_mcp_claims", default=None)
+CURRENT_CLAIMS: ContextVar[dict | None] = ContextVar("grounded_rag_mcp_claims", default=None)
 """Claims of the verified token for the request being served, if any.
 
 Tools need the caller's identity for two things the transport cannot do for

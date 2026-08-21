@@ -44,7 +44,7 @@ from app.feedback import FeedbackStore
 from app.pipeline import PipelineDeps, answer_question
 from app.ratelimit import TokenBucketLimiter
 
-logger = logging.getLogger("citespine")
+logger = logging.getLogger("grounded_rag")
 
 McpRunner = Callable[[], AbstractAsyncContextManager[None]]
 """Factory for the MCP session-manager context, entered by the lifespan."""
@@ -246,7 +246,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Build the FastAPI application around the given (or env-derived) settings."""
     app_settings = settings or Settings()
-    application = FastAPI(title="citespine", version=__version__, lifespan=lifespan)
+    application = FastAPI(title="grounded-rag-service", version=__version__, lifespan=lifespan)
     application.state.settings = app_settings
     application.state.rate_limiter = TokenBucketLimiter(
         requests=app_settings.rate_limit_requests,
@@ -282,7 +282,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 
 def serve() -> None:
-    """Console entry point for ``citespine-serve`` (uvicorn app.main:app)."""
+    """Console entry point for ``grounded-rag-serve`` (uvicorn app.main:app)."""
     import uvicorn
 
     uvicorn.run("app.main:app", host="0.0.0.0", port=8000)

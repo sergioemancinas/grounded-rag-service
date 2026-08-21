@@ -21,7 +21,7 @@ from typing import Any, ParamSpec, TypeVar
 from app.mcp_auth import current_subject
 
 # Never log secrets, bearer tokens, or raw question text.
-logger = logging.getLogger("citespine.audit")
+logger = logging.getLogger("grounded_rag.audit")
 
 P = ParamSpec("P")
 R = TypeVar("R")

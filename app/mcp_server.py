@@ -37,7 +37,7 @@ from app.mcp_auth import (
 )
 from app.pipeline import PipelineDeps, answer_question
 
-logger = logging.getLogger("citespine.mcp")
+logger = logging.getLogger("grounded_rag.mcp")
 
 DEFAULT_SEARCH_DESCRIPTION = "Search the documentation corpus and return ranked matching chunks."
 DEFAULT_FETCH_DESCRIPTION = "Fetch one documentation chunk in full by its id, as returned by search."
@@ -120,7 +120,7 @@ def build_mcp_server(settings: Settings, deps_provider: Callable[[], PipelineDep
     mounted server picks up the dependencies built in the host's lifespan.
     """
     server_class = _import_mcp_server_class()
-    server = server_class("citespine")
+    server = server_class("grounded-rag-service")
     _install_tool_audit(server, settings)
 
     @server.tool(description=settings.mcp_tool_search_description or DEFAULT_SEARCH_DESCRIPTION)

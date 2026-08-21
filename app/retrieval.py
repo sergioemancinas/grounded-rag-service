@@ -13,7 +13,7 @@ from pathlib import Path
 
 from app.config import Settings
 
-logger = logging.getLogger("citespine.retrieval")
+logger = logging.getLogger("grounded_rag.retrieval")
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9_./-]+")
 IDENTIFIER_RE = re.compile(

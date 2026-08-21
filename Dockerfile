@@ -14,9 +14,9 @@ COPY . .
 # with no volume, no credentials, and no network.
 RUN python scripts/build_index.py --docs data/sample_docs --out data/index.jsonl
 
-RUN useradd --create-home --uid 10001 citespine \
-    && chown -R citespine:citespine /app
-USER citespine
+RUN useradd --create-home --uid 10001 grounded-rag-service \
+    && chown -R grounded-rag-service:grounded-rag-service /app
+USER grounded-rag-service
 
 EXPOSE 8000
 

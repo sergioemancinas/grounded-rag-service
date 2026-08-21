@@ -33,7 +33,7 @@ from app.channels.slack_render import render_answer_blocks
 from app.config import Settings
 from app.resilience import CircuitBreaker
 
-logger = logging.getLogger("citespine.channels.slack")
+logger = logging.getLogger("grounded_rag.channels.slack")
 
 PLACEHOLDER_TEXT = "Searching the docs..."
 """Posted immediately, then edited with the answer. Change freely."""

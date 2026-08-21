@@ -28,7 +28,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-logger = logging.getLogger("citespine.feedback")
+logger = logging.getLogger("grounded_rag.feedback")
 
 
 class FeedbackStore:

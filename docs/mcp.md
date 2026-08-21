@@ -23,7 +23,7 @@ Client configuration:
 ```json
 {
   "mcpServers": {
-    "citespine": { "url": "http://localhost:8090/mcp" }
+    "grounded-rag-service": { "url": "http://localhost:8090/mcp" }
   }
 }
 ```
@@ -85,7 +85,7 @@ MCP_AUTH_MODE=jwt
 MCP_AUTH_ISSUER=https://idp.example.com/oauth2/default
 MCP_RESOURCE_URL=https://rag.example.com/mcp
 MCP_AUTH_AUDIENCE=https://rag.example.com/mcp   # defaults to MCP_RESOURCE_URL
-MCP_REQUIRED_SCOPES=citespine.read              # optional
+MCP_REQUIRED_SCOPES=grounded-rag-service.read              # optional
 MCP_AUTH_JWKS_URL=                              # optional; discovered from the issuer
 MCP_AUTH_ALGORITHMS=RS256
 ```

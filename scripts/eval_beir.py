@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Public BEIR retrieval benchmark for citespine's lexical / dense / hybrid lanes.
+"""Public BEIR retrieval benchmark for grounded-rag-service's lexical / dense / hybrid lanes.
 
 Downloads and caches datasets under data/benchmarks/. Stdlib only for I/O;
 retrieval uses this repo's tokenize / BM25 / Embedder / cosine / RRF
@@ -80,7 +80,7 @@ def mrr_at_k(ranked_doc_ids: Sequence[str], qrels: dict[str, float], k: int) -> 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Evaluate citespine retrieval lanes on a BEIR dataset (default: SciFact)."
+        description="Evaluate grounded-rag-service retrieval lanes on a BEIR dataset (default: SciFact)."
     )
     parser.add_argument("--dataset", default="scifact", choices=sorted(DATASET_URLS))
     parser.add_argument(
@@ -386,7 +386,7 @@ def main() -> None:
     queries = read_jsonl(dataset_dir / "queries.jsonl")
     qrels = load_qrels(dataset_dir / "qrels" / "test.tsv")
 
-    index_path = args.cache_dir / args.dataset / f"citespine_index__{slug}.jsonl"
+    index_path = args.cache_dir / args.dataset / f"grounded_rag_index__{slug}.jsonl"
     embeddings_path = args.cache_dir / args.dataset / f"embeddings__{slug}.jsonl"
     print(f"Building index for {len(corpus)} documents -> {index_path}")
     print(f"Embedder={args.embedder} cache_key={slug}")

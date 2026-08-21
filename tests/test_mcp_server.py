@@ -34,7 +34,7 @@ def test_tool_descriptions_are_overridable(fake_deps) -> None:
 
 
 def test_extensions_module_can_add_tools(fake_deps, monkeypatch: pytest.MonkeyPatch) -> None:
-    module = types.ModuleType("citespine_test_ext")
+    module = types.ModuleType("grounded_rag_test_ext")
 
     def register(server, deps_provider, settings):
         @server.tool(description="Custom tool from an extensions module.")
@@ -42,18 +42,18 @@ def test_extensions_module_can_add_tools(fake_deps, monkeypatch: pytest.MonkeyPa
             return "pong"
 
     module.register = register  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "citespine_test_ext", module)
+    monkeypatch.setitem(sys.modules, "grounded_rag_test_ext", module)
 
-    server = build_mcp_server(Settings(mcp_extensions_module="citespine_test_ext"), lambda: fake_deps)
+    server = build_mcp_server(Settings(mcp_extensions_module="grounded_rag_test_ext"), lambda: fake_deps)
 
     assert "acme_ping" in tool_names(server)
 
 
 def test_extensions_module_without_register_fails_loudly(fake_deps, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setitem(sys.modules, "citespine_broken_ext", types.ModuleType("citespine_broken_ext"))
+    monkeypatch.setitem(sys.modules, "grounded_rag_broken_ext", types.ModuleType("grounded_rag_broken_ext"))
 
     with pytest.raises(RuntimeError, match="register"):
-        build_mcp_server(Settings(mcp_extensions_module="citespine_broken_ext"), lambda: fake_deps)
+        build_mcp_server(Settings(mcp_extensions_module="grounded_rag_broken_ext"), lambda: fake_deps)
 
 
 def test_resource_url_defaults_to_localhost_with_mcp_path() -> None:

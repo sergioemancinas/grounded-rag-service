@@ -69,11 +69,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build image
-        run: docker build -t citespine:ci .
+        run: docker build -t grounded-rag-service:ci .
       - name: Smoke /health
         run: |
-          docker run -d --name citespine-ci -p 8000:8000 citespine:ci
-          cleanup() { docker stop citespine-ci >/dev/null 2>&1 || true; docker rm citespine-ci >/dev/null 2>&1 || true; }
+          docker run -d --name grounded-rag-ci -p 8000:8000 grounded-rag-service:ci
+          cleanup() { docker stop grounded-rag-ci >/dev/null 2>&1 || true; docker rm grounded-rag-ci >/dev/null 2>&1 || true; }
           trap cleanup EXIT
           for _ in $(seq 1 30); do
             if curl -sf http://127.0.0.1:8000/health; then
@@ -83,7 +83,7 @@ jobs:
             sleep 1
           done
           echo "health check failed" >&2
-          docker logs citespine-ci >&2 || true
+          docker logs grounded-rag-ci >&2 || true
           exit 1
 
   benchmark:

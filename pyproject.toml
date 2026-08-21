@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "citespine"
+name = "grounded-rag-service"
 version = "0.1.0"
 description = "Grounded, citation-first RAG service skeleton"
 readme = "README.md"
@@ -30,8 +30,8 @@ slack = []
 eval = ["fastembed", "numpy>=1.26,<2.3"]
 
 [project.scripts]
-citespine-serve = "app.main:serve"
-citespine-index = "scripts.build_index:main"
+grounded-rag-serve = "app.main:serve"
+grounded-rag-index = "scripts.build_index:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
