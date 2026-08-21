@@ -15,16 +15,20 @@ read, forked, and modified.
 
 ## Contents
 
-- [Architecture](#architecture)
-- [Getting started](#getting-started)
-- [Retrieval evaluation](#retrieval-evaluation)
-- [HTTP API](#http-api)
-- [Repository layout](#repository-layout)
-- [Extension points](#extension-points)
-- [Design rationale](#design-rationale)
-- [Security](#security)
-- [Scope](#scope)
-- [Acknowledgments](#acknowledgments)
+1. [Architecture](#architecture) — the answer path, stage by stage
+2. [Getting started](#getting-started) — running it with no credentials
+3. [Retrieval evaluation](#retrieval-evaluation) — measured results on a public benchmark
+   - [Offline default](#offline-default)
+   - [Real embedder](#real-embedder)
+   - [Interpretation](#interpretation)
+4. [HTTP API](#http-api) — endpoints and request handling
+5. [Repository layout](#repository-layout) — where each concern lives
+6. [Extension points](#extension-points) — replacing any stage
+7. [Design rationale](#design-rationale) — why the pipeline is shaped this way
+8. [Security](#security) — threat model and implemented controls
+9. [Scope](#scope) — what this deliberately does not do
+10. [Acknowledgments](#acknowledgments)
+11. [License](#license)
 
 ## Architecture
 
