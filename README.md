@@ -4,34 +4,53 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-**Grounded, citation-first RAG service skeleton. FastAPI, channel-agnostic, zero API keys to run.**
+A grounded, citation-first retrieval-augmented generation service. The core is
+a channel-agnostic HTTP API; Slack, MCP, and command-line front ends are
+optional adapters over a single seam. It runs end to end with no credentials
+and no network, and its retrieval quality is measured on a public benchmark
+rather than asserted.
 
-- **Grounded by construction.** Every answer is generated from retrieved chunks, cites them inline, and passes a faithfulness gate before it is delivered.
-- **Channel-agnostic.** The core is an HTTP service. Slack, Discord, a CLI, or an MCP client are adapters over one seam, and none of them are required.
-- **Runs offline, out of the box.** Local hash embeddings and extractive generation mean `git clone` to first cited answer needs no credentials and no network.
+Roughly 3,600 lines of application code, deliberately explicit and meant to be
+read, forked, and modified.
 
-It is a skeleton, not a framework: about 3,000 lines of explicit Python you are meant to read, fork, and own.
+## Contents
 
-## Pipeline
+- [Architecture](#architecture)
+- [Getting started](#getting-started)
+- [Retrieval evaluation](#retrieval-evaluation)
+- [HTTP API](#http-api)
+- [Repository layout](#repository-layout)
+- [Extension points](#extension-points)
+- [Design rationale](#design-rationale)
+- [Security](#security)
+- [Scope](#scope)
+- [Acknowledgments](#acknowledgments)
+
+## Architecture
+
+The answer path is a single linear function, `answer_question()` in
+`app/pipeline.py`:
 
 ```text
 question
-  -> semantic cache        (skip everything on a near-identical question)
-  -> intent router         (documentation question, or small talk)
-  -> query expansion       (one question becomes several phrasings)
-  -> hybrid retrieval      (dense cosine + BM25, per phrasing)
-  -> RRF fusion            (merge ranked lists without comparing raw scores)
-  -> identifier injection  (force exact matches for /v1/orders, snake_case, ERR_CODES)
-  -> rerank                (optional cross-encoder over the candidate pool)
-  -> MMR selection         (drop near-duplicates, cap chunks per document)
-  -> generation            (answer only from context, cite every claim)
-  -> grounding gate        (score, regenerate once, then caveat)
+  -> semantic cache        skip retrieval and generation on a near-identical question
+  -> intent router         documentation question, or conversational filler
+  -> query expansion       one question becomes several retrieval phrasings
+  -> hybrid retrieval      dense cosine and BM25, per phrasing
+  -> RRF fusion            merge ranked lists without comparing raw scores
+  -> identifier injection  force exact matches for snake_case names and API paths
+  -> rerank                optional cross-encoder over the candidate pool
+  -> MMR selection         drop near-duplicates, cap chunks per document
+  -> generation            answer only from context, cite every claim
+  -> grounding gate        score faithfulness, regenerate once, then caveat
   -> cited markdown answer
 ```
 
-The whole flow is one readable function: `answer_question()` in `app/pipeline.py`.
+Each stage is a small Protocol defined in `app/interfaces.py` and selected at
+startup, so any one of them can be replaced without touching the others. See
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## Quickstart
+## Getting started
 
 ```bash
 python3.11 -m venv .venv && source .venv/bin/activate
@@ -42,160 +61,198 @@ uvicorn app.main:app --port 8000
 
 ```bash
 curl -s localhost:8000/v1/ask -H 'content-type: application/json' \
-  -d '{"question":"How do refunds work?"}' | jq '{answer, sources: [.sources[].title], grounding}'
+  -d '{"question":"Which values does fulfillment_type accept?"}' \
+  | jq '{answer, sources: [.sources[].title], grounding}'
 ```
 
-No environment variables, no API keys. The bundled corpus is fictional documentation for a made-up commerce platform, Acme Storefront.
+No environment variables and no API keys are required. The default stack uses
+deterministic local embeddings and extractive generation; the bundled corpus is
+fictional API documentation for a platform that does not exist.
 
-Other ways in:
-
-```bash
-python examples/adapter_cli.py "How do refunds work?"   # same pipeline, in your terminal
-python scripts/smoke_query.py "How do refunds work?"    # retrieval + timings
-python scripts/eval_golden.py                           # fast smoke test (not an evaluation)
-python scripts/eval_beir.py --lanes bm25,dense,hybrid   # the real benchmark, see Results
-python -m pytest                                        # full suite, offline
-```
-
-## Results
-
-Measured on [BEIR SciFact](https://arxiv.org/abs/2104.08663) (300 test
-queries, 5,183 documents) with this repo's own retrieval code.
-
-**Offline default** (`LocalHashEmbedder`, no extra deps):
+Other entry points:
 
 ```bash
+python examples/adapter_cli.py "Which values does fulfillment_type accept?"
+python scripts/smoke_query.py "Which values does fulfillment_type accept?"
 python scripts/eval_beir.py --lanes bm25,dense,hybrid
+python -m pytest
 ```
 
-| Lane | nDCG@10 | Recall@10 | MRR@10 |
-| --- | --- | --- | --- |
-| BM25 only | **0.6047** | 0.7262 | 0.5697 |
-| Dense only (LocalHashEmbedder) | 0.1557 | 0.2381 | 0.1322 |
-| Hybrid, RRF (LocalHashEmbedder) | 0.3756 | 0.5361 | 0.3322 |
+## Retrieval evaluation
 
-**Real embedder** (`BAAI/bge-small-en-v1.5` via fastembed):
+Measured on [BEIR SciFact](https://arxiv.org/abs/2104.08663), 300 test queries
+over 5,183 documents, using this repository's own retrieval code.
 
-```bash
-pip install -e ".[eval]"
-python scripts/eval_beir.py --lanes bm25,dense,hybrid \
-  --embedder examples.custom_embedder_fastembed:FastEmbedEmbedder
-```
+### Offline default
+
+`LocalHashEmbedder`, no additional dependencies:
 
 | Lane | nDCG@10 | Recall@10 | MRR@10 |
 | --- | --- | --- | --- |
 | BM25 only | 0.6047 | 0.7262 | 0.5697 |
-| Dense only (bge-small-en-v1.5) | **0.7200** | 0.8452 | 0.6845 |
-| Hybrid, RRF (bge-small-en-v1.5) | 0.6783 | 0.7783 | 0.6528 |
+| Dense only | 0.1557 | 0.2381 | 0.1322 |
+| Hybrid, RRF | 0.3756 | 0.5361 | 0.3322 |
 
-Published BEIR reference for SciFact BM25 is nDCG@10 0.665, from a different
-implementation (Elasticsearch, multi-field). Shown for orientation; this is
-not a reproduction of it.
+### Real embedder
 
-**Read both tables honestly.** With the offline hash embedder, hybrid is 38%
-worse than BM25 alone (0.3756 vs 0.6047): RRF blends a strong lexical lane
-with a near-random dense lane (0.1557 standalone). With
-`BAAI/bge-small-en-v1.5`, hybrid beats BM25 (0.6783 vs 0.6047) but still
-trails dense-only (0.7200): the same untuned RRF constant 60 now mixes a
-stronger dense lane with a weaker lexical one. No fusion parameters were
+`BAAI/bge-small-en-v1.5` via fastembed (`pip install -e ".[eval]"`):
+
+| Lane | nDCG@10 | Recall@10 | MRR@10 |
+| --- | --- | --- | --- |
+| BM25 only | 0.6047 | 0.7262 | 0.5697 |
+| Dense only | 0.7200 | 0.8452 | 0.6845 |
+| Hybrid, RRF | 0.6783 | 0.7783 | 0.6528 |
+
+### Interpretation
+
+Hybrid retrieval is not unconditionally better than its parts. With the offline
+hash embedder it is a 38% relative regression against BM25 alone, because
+reciprocal rank fusion blends a strong lexical lane with a dense lane that
+carries almost no semantic signal. With a real embedding model the ordering
+changes: hybrid improves on BM25 by about 12% relative, but still trails
+dense-only retrieval, since the same untuned fusion constant now mixes a
+stronger dense ranking with a weaker lexical one. No fusion parameters were
 tuned against this split.
 
-This is also why the bundled fictional corpus is a smoke test rather than an
-evaluation: three documents cannot expose a regression that a public
-benchmark found on the first run. Full methodology, licensing, and
-limitations: [docs/EVALUATION.md](docs/EVALUATION.md).
+The published BEIR reference for SciFact BM25 is nDCG@10 0.665, obtained with a
+different implementation. It is shown for orientation and is not reproduced
+here.
+
+The three-document sample corpus is a smoke test, not an evaluation: it cannot
+express a regression of this size, which is why a public benchmark was adopted.
+Methodology, licensing, and limitations are in
+[docs/EVALUATION.md](docs/EVALUATION.md).
 
 ## HTTP API
 
 | Endpoint | Purpose |
 | --- | --- |
-| `POST /v1/ask` | Full pipeline. Returns markdown `answer`, `citations`, `sources`, `grounding`, `timings`, `request_id`. |
-| `POST /v1/search` | Retrieval only. Returns raw ranked chunks, no generation. |
-| `POST /v1/feedback` | Records an up/down verdict against a `request_id`. |
-| `GET /health` | Liveness plus the resolved provider names and chunk count. |
+| `POST /v1/ask` | Full pipeline; returns a markdown answer with citations, sources, grounding score, timings, and a request id |
+| `POST /v1/search` | Retrieval only; returns ranked corpus chunks without generation |
+| `POST /v1/feedback` | Records a verdict against a previously returned request id |
+| `GET /health` | Liveness, resolved provider names, and chunk count |
 
-Set `API_AUTH_TOKEN` to require a static bearer on `/v1/*`. Platform signature verification (Slack HMAC, Discord Ed25519) belongs to adapters, never to the core.
+`API_AUTH_TOKEN` enables a static bearer on `/v1`. Platform signature
+verification belongs to adapters, never to the core. A per-caller rate limit
+and a maximum question length are enabled by default.
 
-**Streaming** is deliberately absent from v1. The grounding gate judges a *completed* answer and may regenerate it, which token streaming cannot express, and chat adapters render placeholder-then-edit rather than consuming SSE. `GET /v1/ask/stream` is reserved for when the gate becomes incremental.
+Streaming is intentionally absent. The grounding gate evaluates a completed
+answer and may replace it, which token streaming cannot express, and chat
+adapters render a placeholder and edit it rather than consuming an event
+stream.
 
 ## Repository layout
 
 ```text
 app/
-  main.py          Core service: /v1 routes, lifespan wiring, mount hooks
-  pipeline.py      answer_question(): the whole flow, in order
-  interfaces.py    Every stage Protocol, with its contract in the docstring
-  registry.py      Name -> factory dicts, plus the dotted-path escape hatch
+  main.py          core service: /v1 routes, lifespan wiring, adapter mounts
+  pipeline.py      answer_question(): the full flow, in order
+  interfaces.py    every stage Protocol, with its contract in the docstring
+  registry.py      name-to-factory tables and the dotted-path escape hatch
   deps.py          build_deps(): where settings become wired components
-  providers.py     Local + OpenAI embedders and generators
-  retrieval.py     JSONL index, BM25, cosine, RRF, MMR
-  rerank.py        Passthrough default, cross-encoder seam
-  grounding.py     Faithfulness judges (heuristic and LLM)
-  llm.py           Query expansion, answer generation, follow-ups
-  prompts/         Prompt text as .md files; override with PROMPTS_DIR
-  cache.py         Semantic cache      router.py     Intent classification
-  resilience.py    Circuit breaker     feedback.py  SQLite, hashed identifiers
-  ingest.py        Document + Source protocol, markdown chunker
-  api_models.py    Request/response shapes: the adapter contract
-  channels/        Adapters. Delete freely.
-    base.py          The AskFn seam and the three adapter rules
-    slack.py         Reference adapter: HMAC, dedup, Block Kit
-    http_client.py   An AskFn that calls a remote core over HTTP
-  mcp_server.py    MCP tools (search/fetch/ask). Delete freely.
+  retrieval.py     JSONL index, BM25, cosine similarity, RRF, MMR
+  providers.py     local and OpenAI embedders and generators
+  grounding.py     faithfulness judges           llm.py       expansion, generation
+  cache.py         scoped semantic cache         router.py    intent classification
+  ratelimit.py     token-bucket limiter          audit.py     structured tool audit
+  feedback.py      SQLite store, keyed digests   ingest.py    Document and Source
+  channels/        optional adapters (Slack reference implementation)
+  mcp_server.py    MCP tools: search, fetch, ask
   mcp_auth.py      OAuth 2.1 resource server for MCP
-scripts/           build_index, smoke_query, eval_golden
-examples/          One runnable file per extension point
-docs/              EXTENDING, ARCHITECTURE, adapters, mcp, DEPLOYMENT
+scripts/           build_index, smoke_query, eval_golden, eval_beir
+examples/          one runnable file per extension point
+docs/              architecture, extending, adapters, MCP, evaluation, threat model
 ```
 
-## Customizing
+## Extension points
 
-Every stage is a small Protocol, chosen by an environment variable, with a
-zero-dependency local default. Point a `*_CLASS` variable at your own class
-and nothing in this repository needs to change:
+Every stage has a zero-dependency default and is selected by environment
+variable. Pointing a `*_CLASS` variable at an external class requires no change
+to this repository:
 
 ```bash
 EMBEDDER_CLASS=mypkg.embed:E5Embedder
-GENERATOR_CLASS=mypkg.gen:ClaudeGenerator
 RETRIEVER_CLASS=mypkg.store:PgVectorRetriever
 ```
 
-| Seam | Swap by | Example |
+| Seam | Selected by | Example |
 | --- | --- | --- |
-| Embedder | `EMBEDDING_PROVIDER` or `EMBEDDER_CLASS` | `examples/custom_embedder_fastembed.py` |
-| Generator | `GENERATION_PROVIDER` or `GENERATOR_CLASS` | `examples/custom_generator_anthropic.py` |
-| Reranker | `RERANKER_CLASS` + `RERANK_ENABLED` | `examples/custom_reranker_crossencoder.py` |
-| Retriever / store | `RETRIEVER_CLASS` | `examples/custom_store_sqlite.py` |
-| Grounding judge | `GROUNDING_JUDGE` or `GROUNDING_JUDGE_CLASS` | `app/grounding.py` |
+| Embedder | `EMBEDDING_PROVIDER`, `EMBEDDER_CLASS` | `examples/custom_embedder_fastembed.py` |
+| Generator | `GENERATION_PROVIDER`, `GENERATOR_CLASS` | `examples/custom_generator_anthropic.py` |
+| Reranker | `RERANKER_CLASS`, `RERANK_ENABLED` | `examples/custom_reranker_crossencoder.py` |
+| Retriever | `RETRIEVER_CLASS` | `examples/custom_store_sqlite.py` |
+| Grounding judge | `GROUNDING_JUDGE`, `GROUNDING_JUDGE_CLASS` | `app/grounding.py` |
 | Prompts | `PROMPTS_DIR` | `app/prompts/*.md` |
 | Ingestion source | `--source` on `build_index.py` | `examples/custom_source_sitemap.py` |
-| Channel | one `include_router` line | `examples/adapter_discord.py` |
+| Channel adapter | one `include_router` call | `examples/adapter_discord.py` |
 | MCP tools | `MCP_EXTENSIONS_MODULE` | `examples/mcp_tool_custom.py` |
 
-Full recipes: [docs/EXTENDING.md](docs/EXTENDING.md). Design rationale: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Adapters: [docs/adapters.md](docs/adapters.md). MCP and OAuth: [docs/mcp.md](docs/mcp.md). Deployment: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+Recipes are in [docs/EXTENDING.md](docs/EXTENDING.md); adapter design in
+[docs/adapters.md](docs/adapters.md); MCP and OAuth setup in
+[docs/mcp.md](docs/mcp.md); deployment in
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
-## Design notes
+## Design rationale
 
-**Hybrid retrieval**, because real questions contain identifiers. Dense vectors capture "how do I send an order back", lexical matching captures `fulfillment_type` and `POST /v1/orders`, and only one of those is a paraphrase problem. Exact identifier matches are force-injected into the candidate pool so precise API questions cannot be ranked away. The measured caveat is above: with a real embedder hybrid beats BM25 on SciFact but does not beat dense alone under the default RRF settings; with the offline hash embedder it is a clear regression.
+**Hybrid retrieval.** Technical questions contain identifiers. Dense vectors
+handle paraphrase; lexical matching handles `fulfillment_type` and
+`POST /v1/orders`, where an approximate match is not useful. Exact identifier
+matches are injected into the candidate pool so precise questions cannot be
+ranked away. The measured limits of this design are reported above.
 
-**RRF over score mixing**, because a cosine similarity and a BM25 score are not on a shared scale. Fusing by rank sidesteps the tuning problem that weighted score mixing creates.
+**Rank fusion rather than score mixing.** A cosine similarity and a BM25 score
+are not on a common scale, so fusing by rank avoids inventing a weighting
+between incommensurable units.
 
-**A grounding gate before delivery**, because a confident wrong answer costs more than a slow one. The judge scores faithfulness against the retrieved chunks; below threshold the pipeline regenerates once with a stricter prompt, and if it still fails the answer ships with an explicit low-confidence note.
+**A grounding gate before delivery.** A confident wrong answer is more
+expensive than a slow one. The judge scores faithfulness against the retrieved
+chunks; below threshold the pipeline regenerates once under a stricter prompt
+and, failing that, delivers with an explicit low-confidence note.
 
-**Fail-closed verification.** An unset Slack signing secret rejects every request rather than accepting unsigned ones. An unknown provider name fails at startup, listing what is available, rather than at the first request.
+**Fail-closed verification.** An unset signing secret rejects every request
+rather than accepting unsigned ones, and an unknown provider name fails at
+startup rather than on first use.
 
-**Keyed feedback digests.** User ids and questions are stored as HMAC-SHA256 digests under a secret key, not plain hashes. A bare SHA-256 of a platform user id or a natural-language question is reversible by enumeration or dictionary attack, so only the key makes the digest unlinkable to whoever later reads the database. Even keyed, this is pseudonymization rather than anonymization: with the key the mapping is recoverable, so the rows remain personal data under GDPR.
+**Scoped answer cache.** A cache hit bypasses retrieval entirely, which makes
+the cache, not the retriever, the boundary at which an answer could cross an
+authorization line. Entries are partitioned by caller.
 
-**Scoped answer cache.** A cache hit skips retrieval entirely, which makes the cache, not the retriever, the place where an answer would cross an authorization boundary. Entries are therefore partitioned by caller scope, so adding per-document permissions later cannot silently turn the cache into a cross-user disclosure channel.
+**Keyed feedback digests.** Identifiers and question text are stored as
+HMAC-SHA256 digests under a secret key. Unkeyed hashes of these inputs are
+reversible by enumeration or dictionary attack. Even keyed, this is
+pseudonymization rather than anonymization.
 
-## Non-goals
+## Security
 
-No vector database is required (the JSONL index is the default; `RETRIEVER_CLASS` is the seam if you want one). No numpy, no RAG framework, no multi-tenancy, no web UI, no agent loop. New channels, stores, and rerankers belong in `examples/`, never in `requirements.txt`. Keeping the dependency list short is what makes the code readable.
+[docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) decomposes the system into
+components, data flows, and trust boundaries, then works STRIDE, the OWASP Top
+10 for LLM Applications, and the OWASP MCP Top 10 against them. Each entry is
+marked mitigated, partial, or not mitigated, with the control named or the gap
+stated; automated findings that do not apply are listed with the reason for
+dismissal.
+
+Implemented controls include HMAC webhook verification on raw request bytes,
+OAuth 2.1 resource-server validation for MCP with a canonical audience,
+per-caller rate limiting, index integrity verification against a signed
+manifest, and structured audit events for tool calls. Known gaps, including the
+absence of document-level authorization and the fact that prompt-injection
+resistance is argued rather than demonstrated, are documented in the same file.
+
+## Scope
+
+No vector database is required; the JSONL index is the default and
+`RETRIEVER_CLASS` is the seam for anything larger. There is no numpy
+dependency, no RAG framework, no multi-tenancy, no web interface, and no agent
+loop. Additional channels, stores, and rerankers belong in `examples/` rather
+than in the core dependency list.
 
 ## Acknowledgments
 
-- [RAGFlow](https://github.com/infiniflow/ragflow) inspired the citation-first, grounded pipeline design. This project shares no code with RAGFlow.
-- [Model Context Protocol](https://modelcontextprotocol.io) defines the server spec and the OAuth 2.1 authorization model implemented in `app/mcp_server.py` and `app/mcp_auth.py`.
+- [RAGFlow](https://github.com/infiniflow/ragflow) informed the citation-first
+  pipeline design. No code is shared with it.
+- [Model Context Protocol](https://modelcontextprotocol.io) specifies the
+  server and authorization model implemented in `app/mcp_server.py` and
+  `app/mcp_auth.py`.
 
 ## License
 
