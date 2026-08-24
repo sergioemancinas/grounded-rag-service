@@ -103,7 +103,7 @@ jobs:
       - name: BM25 lane on BEIR SciFact
         run: python -B scripts/eval_beir.py --lanes bm25 --threshold 0.58 --json beir-scifact.json
       - name: Upload metrics
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: beir-scifact-metrics
           path: beir-scifact.json
