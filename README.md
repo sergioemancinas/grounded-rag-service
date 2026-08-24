@@ -245,8 +245,10 @@ resistance is argued rather than demonstrated, are documented in the same file.
 ## Scope
 
 No vector database is required; the JSONL index is the default and
-`RETRIEVER_CLASS` is the seam for anything larger. There is no numpy
-dependency, no RAG framework, no multi-tenancy, no web interface, and no agent
+`RETRIEVER_CLASS` is the seam for anything larger. Retrieval arithmetic is
+pure Python, so the core installs without numpy — it appears only in the
+optional `eval` extra, pulled in by the embedding model used for benchmarking.
+There is no RAG framework, no multi-tenancy, no web interface, and no agent
 loop. Additional channels, stores, and rerankers belong in `examples/` rather
 than in the core dependency list.
 
