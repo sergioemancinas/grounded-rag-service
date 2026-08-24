@@ -25,9 +25,9 @@ mcp = ["mcp", "PyJWT[crypto]"]
 # Slack adapter needs only httpx (already a core dep); group kept explicit and deletable.
 slack = []
 # Real-embedder BEIR runs (scripts/eval_beir.py --embedder …). ONNX/CPU, no torch.
-# numpy upper bound: 2.3+ ships stubs that use 3.12 `type` statements, which
-# break `mypy app` under python_version = 3.11 once openai follows the import.
-eval = ["fastembed", "numpy>=1.26,<2.3"]
+# numpy arrives transitively via fastembed and is pinned only to a major range;
+# the core service installs without it.
+eval = ["fastembed", "numpy>=1.26,<3"]
 
 [project.scripts]
 grounded-rag-serve = "app.main:serve"
