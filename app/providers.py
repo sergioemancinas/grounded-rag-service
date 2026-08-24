@@ -27,7 +27,7 @@ from app.registry import (
     register_store,
     resolve,
 )
-from app.rerank import CrossEncoderReranker, PassthroughReranker
+from app.rerank import PassthroughReranker
 from app.retrieval import Retriever as JSONLRetriever
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9_./-]+")
@@ -171,8 +171,20 @@ def _passthrough_reranker(settings: Settings) -> Reranker:
 
 @register_reranker("cross_encoder")
 def _cross_encoder_reranker(settings: Settings) -> Reranker:
+    """Refuse at startup rather than 500 on every request.
+
+    ``CrossEncoderReranker`` is a seam, not an implementation: a real one
+    needs a model download or a paid API, either of which would break the
+    offline-by-default promise. Booting successfully and then failing every
+    request is the worst of both outcomes, so the misconfiguration surfaces
+    here, while the operator is still looking at the logs.
+    """
     del settings
-    return CrossEncoderReranker()
+    raise RuntimeError(
+        "RERANK_ENABLED=true selects the built-in cross-encoder seam, which has no "
+        "implementation. Point RERANKER_CLASS at your own reranker (see "
+        "examples/custom_reranker_crossencoder.py) or leave RERANK_ENABLED unset."
+    )
 
 
 @register_store("jsonl")

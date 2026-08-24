@@ -24,6 +24,7 @@ deployment cannot exhaust memory through the cache.
 from __future__ import annotations
 
 import json
+import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable
@@ -74,6 +75,11 @@ class SemanticCache:
         # key after any eviction and silently destroys that entry.
         self.entries: OrderedDict[str, CacheEntry] = OrderedDict()
         self._sequence = count(1)
+        # Sync handlers run in a threadpool, so one cache instance is shared
+        # across workers. Iterating entries while another worker inserts or
+        # evicts raises "OrderedDict mutated during iteration"; the counter is
+        # not atomic either, so both reads and writes are guarded.
+        self._lock = threading.Lock()
         if self.path is not None:
             self._load()
 
@@ -88,9 +94,9 @@ class SemanticCache:
         self._evict_expired()
         best_answer: str | None = None
         best_score = -1.0
-        for entry in self.entries.values():
-            if entry.scope != scope:
-                continue
+        with self._lock:
+            candidates = [e for e in self.entries.values() if e.scope == scope]
+        for entry in candidates:
             score = cosine_similarity(query_embedding, entry.query_embedding)
             if score >= self.similarity_threshold and score > best_score:
                 best_score = score
@@ -101,22 +107,24 @@ class SemanticCache:
         """Cache an answer under ``scope``, evicting the oldest entry if full."""
         if not self.enabled:
             return
-        key = f"e{next(self._sequence)}"
-        self.entries[key] = CacheEntry(
-            query_embedding=list(query_embedding),
-            answer=answer,
-            created_at=self.clock(),
-            scope=scope,
-        )
-        while len(self.entries) > self.max_entries:
-            self.entries.popitem(last=False)
+        with self._lock:
+            key = f"e{next(self._sequence)}"
+            self.entries[key] = CacheEntry(
+                query_embedding=list(query_embedding),
+                answer=answer,
+                created_at=self.clock(),
+                scope=scope,
+            )
+            while len(self.entries) > self.max_entries:
+                self.entries.popitem(last=False)
         self._persist()
 
     def _evict_expired(self) -> None:
         now = self.clock()
-        expired = [key for key, entry in self.entries.items() if now - entry.created_at > self.ttl_seconds]
-        for key in expired:
-            del self.entries[key]
+        with self._lock:
+            expired = [key for key, entry in self.entries.items() if now - entry.created_at > self.ttl_seconds]
+            for key in expired:
+                self.entries.pop(key, None)
         if expired:
             self._persist()
 
@@ -139,6 +147,8 @@ class SemanticCache:
         if self.path is None:
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock:
+            snapshot = list(self.entries.values())
         payload = [
             {
                 "query_embedding": entry.query_embedding,
@@ -146,7 +156,7 @@ class SemanticCache:
                 "created_at": entry.created_at,
                 "scope": entry.scope,
             }
-            for entry in self.entries.values()
+            for entry in snapshot
         ]
         with self.path.open("w", encoding="utf-8") as handle:
             json.dump(payload, handle)

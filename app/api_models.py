@@ -17,8 +17,11 @@ from pydantic import BaseModel, Field
 class AskRequest(BaseModel):
     """One question for the grounded pipeline (POST /v1/ask)."""
 
-    # max_length matches Settings.max_question_chars default: reject before any model call.
-    question: str = Field(max_length=4000)
+    # The real ceiling is MAX_QUESTION_CHARS, enforced in app/main.py before
+    # any provider call. This bound is a static backstop an order of magnitude
+    # above the default, so an absurd payload is rejected during parsing even
+    # if the setting is raised.
+    question: str = Field(max_length=100_000)
     history: list[str] = Field(default_factory=list, description="Client-held prior turns; keeps the core stateless.")
     conversation_id: str | None = Field(default=None, description="Opaque adapter-defined thread id.")
     user_id: str | None = Field(default=None, description="Hashed before any storage; never persisted raw.")
@@ -61,7 +64,7 @@ class SearchRequest(BaseModel):
     """Retrieval-only query (POST /v1/search); no generation involved."""
 
     # Same ceiling as AskRequest.question so search cannot be a bypass for size.
-    query: str = Field(max_length=4000)
+    query: str = Field(max_length=100_000)
     top_k: int = Field(default=5, ge=1, le=50)
     filters: dict[str, Any] | None = Field(default=None, description="Reserved for retrievers that support filtering.")
 

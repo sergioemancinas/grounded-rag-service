@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Callable
 from contextlib import ContextDecorator
@@ -27,6 +28,11 @@ class CircuitBreaker(ContextDecorator, Generic[T]):
         self.state = "closed"
         self.failure_count = 0
         self.opened_at: float | None = None
+        # FastAPI runs sync route handlers in a threadpool, so one breaker is
+        # shared across workers. Without this lock, concurrent failures are
+        # lost to read-modify-write races and every waiting caller is admitted
+        # as a half-open probe at once, which is the opposite of the intent.
+        self._lock = threading.Lock()
 
     def __enter__(self) -> CircuitBreaker[T]:
         self._before_call()
@@ -57,25 +63,32 @@ class CircuitBreaker(ContextDecorator, Generic[T]):
         return cast(_F, wrapped)
 
     def _before_call(self) -> None:
-        if self.state != "open":
-            return
-        if self.opened_at is not None and self.clock() - self.opened_at >= self.cooldown_seconds:
-            self.state = "half_open"
-            return
-        raise CircuitBreakerOpen("Circuit breaker is open.")
+        with self._lock:
+            if self.state == "closed":
+                return
+            if self.state == "half_open":
+                # A probe is already in flight; everyone else keeps failing
+                # fast until it resolves.
+                raise CircuitBreakerOpen("Circuit breaker is open.")
+            if self.opened_at is not None and self.clock() - self.opened_at >= self.cooldown_seconds:
+                self.state = "half_open"
+                return
+            raise CircuitBreakerOpen("Circuit breaker is open.")
 
     def _record_success(self) -> None:
-        self.state = "closed"
-        self.failure_count = 0
-        self.opened_at = None
+        with self._lock:
+            self.state = "closed"
+            self.failure_count = 0
+            self.opened_at = None
 
     def _record_failure(self) -> None:
-        if self.state == "half_open":
-            self.state = "open"
-            self.opened_at = self.clock()
-            self.failure_count = self.failure_threshold
-            return
-        self.failure_count += 1
-        if self.failure_count >= self.failure_threshold:
-            self.state = "open"
-            self.opened_at = self.clock()
+        with self._lock:
+            if self.state == "half_open":
+                self.state = "open"
+                self.opened_at = self.clock()
+                self.failure_count = self.failure_threshold
+                return
+            self.failure_count += 1
+            if self.failure_count >= self.failure_threshold:
+                self.state = "open"
+                self.opened_at = self.clock()

@@ -23,6 +23,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
+from starlette.concurrency import run_in_threadpool
 
 from app import __version__
 from app.api_models import (
@@ -92,8 +93,18 @@ def cache_scope_for(payload: AskRequest) -> str:
     return payload.user_id or GLOBAL_SCOPE
 
 
+def enforce_question_length(text: str, settings: Settings) -> None:
+    """Reject oversized input before it reaches a provider (MAX_QUESTION_CHARS)."""
+    if len(text) > settings.max_question_chars:
+        raise HTTPException(
+            status_code=422,
+            detail=f"question exceeds MAX_QUESTION_CHARS ({settings.max_question_chars})",
+        )
+
+
 def run_ask(payload: AskRequest, settings: Settings, deps: PipelineDeps) -> AskResponse:
     """Execute the grounded pipeline for one AskRequest."""
+    enforce_question_length(payload.question, settings)
     result = answer_question(
         payload.question,
         history=payload.history,
@@ -189,9 +200,11 @@ def ask_route(
 @api.post("/search", response_model=SearchResponse)
 def search_route(
     payload: SearchRequest,
+    settings: Settings = Depends(get_settings),
     deps: PipelineDeps = Depends(get_deps),
 ) -> SearchResponse:
     """Hybrid retrieval over the corpus index; no generation, raw chunks."""
+    enforce_question_length(payload.query, settings)
     embedding = deps.embedder.embed([payload.query])[0]
     results = deps.retriever.retrieve(payload.query, embedding, payload.top_k)
     return SearchResponse(
@@ -258,7 +271,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # dependencies lazily from app.state so the index still loads in the
     # lifespan rather than at import.
     async def ask(payload: AskRequest) -> AskResponse:
-        return run_ask(payload, application.state.settings, application.state.deps)
+        # answer_question() is synchronous and can run for seconds. Awaiting it
+        # inline would block the event loop for its whole duration, stalling
+        # health checks and every other connection; route handlers avoid this
+        # only because FastAPI threadpools sync handlers automatically.
+        return await run_in_threadpool(run_ask, payload, application.state.settings, application.state.deps)
 
     async def feedback(payload: FeedbackRequest) -> None:
         record_feedback(application, payload)

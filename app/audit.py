@@ -51,10 +51,26 @@ def summarize_arguments(arguments: dict[str, Any], hmac_key: bytes) -> dict[str,
     return summary
 
 
+_FALLBACK_KEY: bytes | None = None
+
+
 def _resolve_key(hmac_key: str) -> bytes:
+    """Key the argument digests, deriving a process-wide fallback if needed.
+
+    The fallback is derived once per process rather than per decorated tool.
+    A key per tool would digest the same question differently in the `search`
+    event and the `ask` event, which defeats the point of the digest: joining
+    a caller's activity across tools without storing what they asked.
+    """
     if hmac_key:
         return hmac_key.encode("utf-8")
-    return secrets.token_bytes(32)
+    global _FALLBACK_KEY
+    if _FALLBACK_KEY is None:
+        _FALLBACK_KEY = secrets.token_bytes(32)
+        logger.info(
+            "audit: FEEDBACK_HMAC_KEY unset, using a per-process key; digests will not be comparable across restarts"
+        )
+    return _FALLBACK_KEY
 
 
 def audit_tool_call(

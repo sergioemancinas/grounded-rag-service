@@ -1,0 +1,21 @@
+# Build context hygiene. Without this the context includes .venv/ and the
+# benchmark corpora (hundreds of MB), and any local .env would be copied into
+# the image and then loaded as configuration by pydantic-settings at startup.
+.env
+.venv/
+.git/
+.github/
+data/benchmarks/
+data/index.jsonl
+data/index.manifest.json
+data/*.sqlite3
+data/cache.json
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+tests/
+docs/
+# examples/ is deliberately kept: the *_CLASS settings documented in
+# docs/EXTENDING.md reference it by dotted path at runtime.

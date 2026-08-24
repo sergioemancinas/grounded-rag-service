@@ -28,8 +28,11 @@ identity function.
 cosine over embeddings, and lexical BM25 over tokens. Support questions
 carry identifiers (`fulfillment_type`, `POST /v1/orders`, `ERR_1042`) where
 lexical matching is exact and embeddings are approximate; conceptual
-questions are the reverse. Running both and fusing is strictly better than
-choosing.
+questions are the reverse. Fusing both is better than choosing only when
+both lanes carry signal: measured on SciFact, weighted fusion beats either
+lane with a real embedding model, and is a large net negative with the
+offline default, whose dense lane is close to noise. See
+[EVALUATION.md](EVALUATION.md) for the numbers.
 
 **RRF fusion.** Ranked lists merge by `sum(1 / (60 + rank))`. Cosine
 similarities and BM25 scores are not comparable quantities, so fusing by

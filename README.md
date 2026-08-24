@@ -238,7 +238,7 @@ dismissal.
 Implemented controls include HMAC webhook verification on raw request bytes,
 OAuth 2.1 resource-server validation for MCP with a canonical audience,
 per-caller rate limiting, index integrity verification against a signed
-manifest, and structured audit events for tool calls. Known gaps, including the
+manifest checksum, and structured audit events for tool calls. Known gaps, including the
 absence of document-level authorization and the fact that prompt-injection
 resistance is argued rather than demonstrated, are documented in the same file.
 
