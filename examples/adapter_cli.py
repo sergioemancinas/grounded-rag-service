@@ -11,7 +11,7 @@ Run it:
 
 Point it at a remote service instead of running the pipeline in-process:
 
-    CITESPINE_URL=https://rag.example.com python examples/adapter_cli.py
+    GROUNDED_RAG_URL=https://rag.example.com python examples/adapter_cli.py
 
 That switch is the whole argument for the AskFn seam: in-process and
 over-HTTP adapters are the same code with a different callable.
@@ -56,11 +56,11 @@ def render(response: AskResponse) -> str:
 
 async def main() -> None:
     settings = Settings()
-    remote = os.environ.get("CITESPINE_URL", "")
+    remote = os.environ.get("GROUNDED_RAG_URL", "")
     if remote:
         from app.channels.http_client import remote_ask
 
-        ask = remote_ask(remote, token=os.environ.get("CITESPINE_TOKEN", ""))
+        ask = remote_ask(remote, token=os.environ.get("GROUNDED_RAG_TOKEN", ""))
     else:
         ask = local_ask(settings)
 
