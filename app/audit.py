@@ -23,6 +23,35 @@ from app.mcp_auth import current_subject
 # Never log secrets, bearer tokens, or raw question text.
 logger = logging.getLogger("grounded_rag.audit")
 
+ROOT_LOGGER_NAME = "grounded_rag"
+
+
+def configure_audit_logging(stream: Any | None = None) -> None:
+    """Attach a handler so audit events actually leave the process.
+
+    Emitting to a logger nobody configured is the failure this function
+    exists to prevent: under uvicorn's default logging config the
+    ``grounded_rag`` tree inherits level WARNING with no root handlers, so
+    every INFO audit event was discarded silently while the tests passed,
+    because ``caplog`` installs a handler the runtime never has.
+
+    An audit control that a missing config line can switch off is not a
+    control, so this runs unconditionally at application startup. It is
+    deliberately conservative: if the operator has already configured
+    handlers on the tree, theirs are left alone.
+    """
+    app_logger = logging.getLogger(ROOT_LOGGER_NAME)
+    if app_logger.handlers:
+        return
+    handler = logging.StreamHandler(stream) if stream is not None else logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    app_logger.addHandler(handler)
+    app_logger.setLevel(logging.INFO)
+    # Records are already JSON; propagating would duplicate them through
+    # uvicorn's formatter as well.
+    app_logger.propagate = False
+
+
 P = ParamSpec("P")
 R = TypeVar("R")
 
@@ -71,6 +100,21 @@ def _resolve_key(hmac_key: str) -> bytes:
             "audit: FEEDBACK_HMAC_KEY unset, using a per-process key; digests will not be comparable across restarts"
         )
     return _FALLBACK_KEY
+
+
+def emit(event: str, **fields: Any) -> None:
+    """Emit one structured audit record.
+
+    Field names follow the OpenTelemetry GenAI semantic conventions where one
+    applies (``gen_ai.operation.name``, ``gen_ai.tool.name``), so the records
+    map onto a collector later without adding a dependency now.
+    """
+    record: dict[str, Any] = {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "event": event,
+    }
+    record.update({name: value for name, value in fields.items() if value is not None})
+    logger.info("%s", json.dumps(record, ensure_ascii=True, sort_keys=True, default=str))
 
 
 def audit_tool_call(

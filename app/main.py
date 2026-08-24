@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hmac
 import logging
+import time
 import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -37,6 +38,7 @@ from app.api_models import (
     SearchResult,
     SourceRef,
 )
+from app.audit import configure_audit_logging, emit
 from app.cache import GLOBAL_SCOPE
 from app.channels.base import FeedbackFn
 from app.config import Settings
@@ -122,6 +124,8 @@ def run_ask(
 ) -> AskResponse:
     """Execute the grounded pipeline for one AskRequest."""
     enforce_question_length(payload.question, settings)
+    request_id = str(uuid.uuid4())
+    started = time.perf_counter()
     result = answer_question(
         payload.question,
         history=payload.history,
@@ -145,6 +149,25 @@ def run_ask(
             score=result.grounding.score,
             passed=result.grounding.score >= settings.grounding_min_score,
         )
+    # One record per retrieval decision: which documents were surfaced, for
+    # which caller, and what the grounding gate concluded. This is the part a
+    # proxy or gateway structurally cannot see, and it is what an incident
+    # reconstruction actually needs.
+    emit(
+        "rag.ask",
+        request_id=request_id,
+        channel=payload.channel,
+        cache_scope=cache_scope,
+        cached=result.cached,
+        intent=result.route.intent,
+        chunk_ids=[scored.chunk.id for scored in result.chunks],
+        doc_ids=sorted({scored.chunk.doc_id for scored in result.chunks}),
+        n_chunks=len(result.chunks),
+        grounding_score=(result.grounding.score if result.grounding else None),
+        grounding_verdict=(result.grounding.verdict if result.grounding else None),
+        question_chars=len(payload.question),
+        duration_ms=round((time.perf_counter() - started) * 1000.0, 3),
+    )
     return AskResponse(
         answer=result.answer,
         citations=result.citations,
@@ -154,7 +177,7 @@ def run_ask(
         cached=result.cached,
         followups=result.followups,
         timings=result.timings,
-        request_id=str(uuid.uuid4()),
+        request_id=request_id,
     )
 
 
@@ -277,6 +300,8 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Build the FastAPI application around the given (or env-derived) settings."""
     app_settings = settings or Settings()
+    # Before anything else: an audit control nobody can hear is not a control.
+    configure_audit_logging()
     application = FastAPI(title="grounded-rag-service", version=__version__, lifespan=lifespan)
     application.state.settings = app_settings
     application.state.rate_limiter = TokenBucketLimiter(

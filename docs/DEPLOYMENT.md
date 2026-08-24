@@ -71,6 +71,26 @@ the index does not match its manifest. Write access to `data/` is equivalent
 to control over every answer the service gives, so treat the index as code
 and rebuild it in CI rather than editing it in place.
 
+### Audit events
+
+Both surfaces emit one structured JSON record per retrieval decision on the
+`grounded_rag.audit` logger, written to stdout by default:
+
+```json
+{"event": "rag.ask", "request_id": "d54adf70-...", "channel": "http",
+ "cache_scope": "*", "cached": false, "intent": "knowledge",
+ "doc_ids": ["orders-api"], "chunk_ids": ["orders-api:1"], "n_chunks": 6,
+ "grounding_score": 1.0, "grounding_verdict": "supported",
+ "question_chars": 42, "duration_ms": 4.9}
+```
+
+MCP tool calls emit `mcp.tool_call` with the verified caller subject and
+keyed argument digests. Neither record contains raw question text.
+
+The `request_id` matches the one in the `/v1/ask` response, so a user report
+can be traced to the exact documents that produced the answer. That is the
+part a gateway or reverse proxy in front of the service cannot reconstruct.
+
 Ship the `grounded_rag.audit` logger somewhere durable. It emits one structured
 JSON event per MCP tool call with the caller subject and outcome, which is
 what makes an incident reconstructable; kept only in a container's stdout it
