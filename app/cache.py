@@ -28,9 +28,10 @@ import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import count
 from pathlib import Path
+from typing import Any
 
 from app.retrieval import cosine_similarity
 
@@ -44,12 +45,20 @@ DEFAULT_MAX_ENTRIES = 1000
 
 @dataclass
 class CacheEntry:
-    """One cached answer, with the query vector that produced it."""
+    """One cached answer, with the query vector that produced it.
+
+    ``payload`` carries the citations, sources, and grounding verdict that
+    accompanied the answer. Caching the answer text alone would strip a hit of
+    its evidence while leaving the ``[n]`` markers in the prose, so the hot
+    path would serve uncited answers from a service whose entire claim is that
+    answers are cited.
+    """
 
     query_embedding: list[float]
     answer: str
     created_at: float
     scope: str = GLOBAL_SCOPE
+    payload: dict[str, Any] = field(default_factory=dict)
 
 
 class SemanticCache:
@@ -83,8 +92,8 @@ class SemanticCache:
         if self.path is not None:
             self._load()
 
-    def get(self, query_embedding: list[float], scope: str = GLOBAL_SCOPE) -> str | None:
-        """Return a cached answer for this scope, or None.
+    def get(self, query_embedding: list[float], scope: str = GLOBAL_SCOPE) -> CacheEntry | None:
+        """Return the cached entry for this scope, or None.
 
         Only entries stored under the same ``scope`` are considered, so a
         hit can never cross an authorization boundary.
@@ -92,7 +101,7 @@ class SemanticCache:
         if not self.enabled:
             return None
         self._evict_expired()
-        best_answer: str | None = None
+        best_entry: CacheEntry | None = None
         best_score = -1.0
         with self._lock:
             candidates = [e for e in self.entries.values() if e.scope == scope]
@@ -100,11 +109,17 @@ class SemanticCache:
             score = cosine_similarity(query_embedding, entry.query_embedding)
             if score >= self.similarity_threshold and score > best_score:
                 best_score = score
-                best_answer = entry.answer
-        return best_answer
+                best_entry = entry
+        return best_entry
 
-    def set(self, query_embedding: list[float], answer: str, scope: str = GLOBAL_SCOPE) -> None:
-        """Cache an answer under ``scope``, evicting the oldest entry if full."""
+    def set(
+        self,
+        query_embedding: list[float],
+        answer: str,
+        scope: str = GLOBAL_SCOPE,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        """Cache an answer and its evidence under ``scope``, evicting if full."""
         if not self.enabled:
             return
         with self._lock:
@@ -114,6 +129,7 @@ class SemanticCache:
                 answer=answer,
                 created_at=self.clock(),
                 scope=scope,
+                payload=dict(payload or {}),
             )
             while len(self.entries) > self.max_entries:
                 self.entries.popitem(last=False)
@@ -141,6 +157,7 @@ class SemanticCache:
                 answer=str(item["answer"]),
                 created_at=float(item["created_at"]),
                 scope=str(item.get("scope", GLOBAL_SCOPE)),
+                payload=dict(item.get("payload", {})),
             )
 
     def _persist(self) -> None:
@@ -155,6 +172,7 @@ class SemanticCache:
                 "answer": entry.answer,
                 "created_at": entry.created_at,
                 "scope": entry.scope,
+                "payload": entry.payload,
             }
             for entry in snapshot
         ]

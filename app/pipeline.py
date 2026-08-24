@@ -74,16 +74,30 @@ def answer_question(
 
     cache_start = time.perf_counter()
     question_embedding = cast(list[list[float]], deps.breaker.call(deps.embedder.embed, [question]))[0]
-    cached_answer = deps.cache.get(question_embedding, scope=cache_scope)
+    cached_entry = deps.cache.get(question_embedding, scope=cache_scope)
     timings["cache"] = time.perf_counter() - cache_start
-    if cached_answer is not None:
+    if cached_entry is not None:
         timings["total"] = time.perf_counter() - total_start
+        # Replay the evidence alongside the answer. Returning the text on its
+        # own would leave the [n] markers in the prose pointing at nothing,
+        # so a cache hit would silently downgrade a cited answer to an
+        # uncited one.
+        payload = cached_entry.payload
+        grounding_payload = payload.get("grounding")
         return PipelineResult(
-            answer=cached_answer,
-            citations=[],
-            chunks=[],
+            answer=cached_entry.answer,
+            citations=list(payload.get("citations", [])),
+            chunks=list(payload.get("chunks", [])),
             timings=timings,
-            grounding=None,
+            grounding=(
+                GroundingResult(
+                    score=float(grounding_payload["score"]),
+                    verdict=str(grounding_payload["verdict"]),
+                    reasons=list(grounding_payload.get("reasons", [])),
+                )
+                if isinstance(grounding_payload, dict)
+                else None
+            ),
             route=RouterResult(intent="knowledge"),
             cached=True,
         )
@@ -144,7 +158,20 @@ def answer_question(
                 )
         timings["grounding"] = time.perf_counter() - grounding_start
 
-    deps.cache.set(question_embedding, answer.text, scope=cache_scope)
+    deps.cache.set(
+        question_embedding,
+        answer.text,
+        scope=cache_scope,
+        payload={
+            "citations": answer.citations,
+            "chunks": selected,
+            "grounding": (
+                {"score": grounding.score, "verdict": grounding.verdict, "reasons": grounding.reasons}
+                if grounding is not None
+                else None
+            ),
+        },
+    )
     timings["total"] = time.perf_counter() - total_start
     return PipelineResult(
         answer=answer.text,

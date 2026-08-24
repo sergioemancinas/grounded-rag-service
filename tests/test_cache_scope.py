@@ -9,6 +9,12 @@ from __future__ import annotations
 
 from app.cache import GLOBAL_SCOPE, SemanticCache
 
+
+def answer_of(entry) -> str | None:
+    """Cache entries carry their evidence; these tests only assert the text."""
+    return None if entry is None else entry.answer
+
+
 VEC_A = [1.0, 0.0, 0.0]
 VEC_B = [0.0, 1.0, 0.0]
 VEC_C = [0.0, 0.0, 1.0]
@@ -44,8 +50,8 @@ def test_eviction_does_not_destroy_a_live_entry() -> None:
     cache.get([0.5, 0.5, 0.5])  # a miss, which is what triggers eviction
     cache.set([0.6, 0.8, 0.0], "answer-4-new")
 
-    assert cache.get(VEC_C) == "answer-3-victim"
-    assert cache.get(VEC_B) == "answer-2"
+    assert answer_of(cache.get(VEC_C)) == "answer-3-victim"
+    assert answer_of(cache.get(VEC_B)) == "answer-2"
     assert cache.get(VEC_A) is None  # genuinely expired
 
 
@@ -56,7 +62,7 @@ def test_entries_are_isolated_by_scope() -> None:
 
     cache.set(VEC_A, "answer for alice", scope="user:alice")
 
-    assert cache.get(VEC_A, scope="user:alice") == "answer for alice"
+    assert answer_of(cache.get(VEC_A, scope="user:alice")) == "answer for alice"
     assert cache.get(VEC_A, scope="user:bob") is None
     assert cache.get(VEC_A) is None  # global scope is not a wildcard
 
@@ -68,8 +74,8 @@ def test_same_question_caches_separately_per_scope() -> None:
     cache.set(VEC_A, "alice answer", scope="user:alice")
     cache.set(VEC_A, "bob answer", scope="user:bob")
 
-    assert cache.get(VEC_A, scope="user:alice") == "alice answer"
-    assert cache.get(VEC_A, scope="user:bob") == "bob answer"
+    assert answer_of(cache.get(VEC_A, scope="user:alice")) == "alice answer"
+    assert answer_of(cache.get(VEC_A, scope="user:bob")) == "bob answer"
 
 
 def test_cache_is_bounded() -> None:
@@ -81,7 +87,7 @@ def test_cache_is_bounded() -> None:
         cache.set([float(index), 1.0, 0.0], f"answer-{index}")
 
     assert len(cache.entries) == 3
-    assert cache.get([9.0, 1.0, 0.0]) == "answer-9"  # newest survived
+    assert answer_of(cache.get([9.0, 1.0, 0.0])) == "answer-9"  # newest survived
 
 
 def test_scope_survives_persistence(tmp_path) -> None:
@@ -92,13 +98,44 @@ def test_scope_survives_persistence(tmp_path) -> None:
 
     reloaded = make_cache(clock, path=path)
 
-    assert reloaded.get(VEC_A, scope="tenant:acme") == "scoped answer"
+    assert answer_of(reloaded.get(VEC_A, scope="tenant:acme")) == "scoped answer"
     assert reloaded.get(VEC_A, scope="tenant:other") is None
 
 
-def test_pipeline_scope_defaults_to_global() -> None:
-    from app.api_models import AskRequest
+def test_cache_scope_ignores_client_supplied_identity() -> None:
+    """Scope must come from authentication, never from the request body.
+
+    Scoping on a body field would let any caller name another caller's
+    partition and be served their cached answers.
+    """
+    from app.config import Settings
     from app.main import cache_scope_for
 
-    assert cache_scope_for(AskRequest(question="q")) == GLOBAL_SCOPE
-    assert cache_scope_for(AskRequest(question="q", user_id="U123")) == "U123"
+    class FakeRequest:
+        def __init__(self, headers: dict[str, str]) -> None:
+            self.headers = headers
+
+    unauthenticated = Settings()
+    protected = Settings(api_auth_token="shared-secret")
+
+    assert cache_scope_for(FakeRequest({}), unauthenticated) == GLOBAL_SCOPE
+    assert cache_scope_for(FakeRequest({"authorization": "Bearer wrong"}), protected) == GLOBAL_SCOPE
+    assert cache_scope_for(FakeRequest({"authorization": "Bearer shared-secret"}), protected) == "http:bearer"
+
+
+def test_cached_answer_keeps_its_evidence() -> None:
+    """A hit must replay citations and grounding, not just the answer text.
+
+    Returning the text alone leaves the [n] markers pointing at nothing, which
+    silently downgrades a cited answer to an uncited one on the hot path.
+    """
+    clock = {"t": 0.0}
+    cache = make_cache(clock)
+    payload = {"citations": [{"number": "1", "title": "Doc"}], "chunks": [], "grounding": None}
+
+    cache.set(VEC_A, "cited answer [1]", payload=payload)
+    entry = cache.get(VEC_A)
+
+    assert entry is not None
+    assert entry.answer == "cited answer [1]"
+    assert entry.payload["citations"] == payload["citations"]

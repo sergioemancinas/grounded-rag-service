@@ -28,11 +28,17 @@ identity function.
 cosine over embeddings, and lexical BM25 over tokens. Support questions
 carry identifiers (`fulfillment_type`, `POST /v1/orders`, `ERR_1042`) where
 lexical matching is exact and embeddings are approximate; conceptual
-questions are the reverse. Fusing both is better than choosing only when
-both lanes carry signal: measured on SciFact, weighted fusion beats either
-lane with a real embedding model, and is a large net negative with the
-offline default, whose dense lane is close to noise. See
-[EVALUATION.md](EVALUATION.md) for the numbers.
+questions are the reverse.
+
+That reasoning is the design's premise, not a measured result, and the
+measurement does not currently support it. On SciFact, equal-weight fusion
+scores below dense-only retrieval with a real embedding model (0.6783 against
+0.7200) and far below BM25 alone with the offline default (0.3756 against
+0.6047). The fusion is unweighted, so a lane carrying almost no signal votes
+as loudly as one carrying most of it, which is sufficient to explain both
+results. Whether the identifier premise holds is a separate question that has
+not been measured. See [EVALUATION.md](EVALUATION.md) for the numbers and
+[ROADMAP.md](ROADMAP.md) for the experiment that would settle it.
 
 **RRF fusion.** Ranked lists merge by `sum(1 / (60 + rank))`. Cosine
 similarities and BM25 scores are not comparable quantities, so fusing by

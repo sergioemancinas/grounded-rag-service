@@ -3,11 +3,16 @@ from __future__ import annotations
 from app.cache import SemanticCache
 
 
+def answer_of(entry) -> str | None:
+    """Cache entries carry their evidence; these tests only assert the text."""
+    return None if entry is None else entry.answer
+
+
 def test_cache_hit_above_threshold() -> None:
     cache = SemanticCache(similarity_threshold=0.95, ttl_seconds=100, clock=lambda: 10.0)
     cache.set([1.0, 0.0], "answer")
 
-    assert cache.get([0.99, 0.01]) == "answer"
+    assert answer_of(cache.get([0.99, 0.01])) == "answer"
 
 
 def test_cache_miss_below_threshold() -> None:

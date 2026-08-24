@@ -80,17 +80,29 @@ def mount_mcp(app: FastAPI, settings: Settings, deps_provider: Callable[[], Pipe
     return mount_mcp_transport(app, settings, deps_provider)
 
 
-def cache_scope_for(payload: AskRequest) -> str:
-    """Partition key for the semantic cache.
+def cache_scope_for(request: Request, settings: Settings) -> str:
+    """Partition key for the semantic cache, derived only from authentication.
 
-    A cache hit skips retrieval, so this is the boundary that decides who can
-    be served someone else's answer. With one shared corpus and no per-user
-    permissions, every caller sees the same documents and a global scope is
-    correct. The moment document-level permissions exist, this must derive
-    from the *authenticated* principal rather than from the request body,
-    which any caller can set.
+    A cache hit skips retrieval entirely, so this is the boundary deciding who
+    can be served someone else's answer. It must never be derived from the
+    request body: ``user_id`` there is a caller-supplied label, so scoping on
+    it would let anyone claim another caller's partition and read their
+    cached answers.
+
+    What authentication is actually available bounds what this can promise. A
+    static bearer is one shared credential, not per-user identity, so every
+    caller presenting it shares a partition — correct, because they can all
+    read the same corpus anyway. An unauthenticated deployment has no caller
+    identity at all and shares the global partition. Real per-user isolation
+    requires per-user credentials; the MCP surface has them, and keys its
+    scope on the verified token subject in app/mcp_server.py.
     """
-    return payload.user_id or GLOBAL_SCOPE
+    if settings.api_auth_token:
+        provided = request.headers.get("authorization", "")
+        expected = f"Bearer {settings.api_auth_token}"
+        if hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8")):
+            return "http:bearer"
+    return GLOBAL_SCOPE
 
 
 def enforce_question_length(text: str, settings: Settings) -> None:
@@ -102,7 +114,12 @@ def enforce_question_length(text: str, settings: Settings) -> None:
         )
 
 
-def run_ask(payload: AskRequest, settings: Settings, deps: PipelineDeps) -> AskResponse:
+def run_ask(
+    payload: AskRequest,
+    settings: Settings,
+    deps: PipelineDeps,
+    cache_scope: str = GLOBAL_SCOPE,
+) -> AskResponse:
     """Execute the grounded pipeline for one AskRequest."""
     enforce_question_length(payload.question, settings)
     result = answer_question(
@@ -110,7 +127,7 @@ def run_ask(payload: AskRequest, settings: Settings, deps: PipelineDeps) -> AskR
         history=payload.history,
         settings=settings,
         deps=deps,
-        cache_scope=cache_scope_for(payload),
+        cache_scope=cache_scope,
     )
     sources = [
         SourceRef(
@@ -190,11 +207,12 @@ api = APIRouter(prefix="/v1", dependencies=[Depends(require_api_auth), Depends(e
 @api.post("/ask", response_model=AskResponse)
 def ask_route(
     payload: AskRequest,
+    request: Request,
     settings: Settings = Depends(get_settings),
     deps: PipelineDeps = Depends(get_deps),
 ) -> AskResponse:
     """Run the full grounded pipeline and return a cited markdown answer."""
-    return run_ask(payload, settings, deps)
+    return run_ask(payload, settings, deps, cache_scope=cache_scope_for(request, settings))
 
 
 @api.post("/search", response_model=SearchResponse)
@@ -271,6 +289,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # dependencies lazily from app.state so the index still loads in the
     # lifespan rather than at import.
     async def ask(payload: AskRequest) -> AskResponse:
+        # In-process adapters authenticate their own callers at the platform
+        # boundary and share one corpus, so they share one cache partition.
         # answer_question() is synchronous and can run for seconds. Awaiting it
         # inline would block the event loop for its whole duration, stalling
         # health checks and every other connection; route handlers avoid this

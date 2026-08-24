@@ -16,16 +16,37 @@ class Answer:
     citations: list[dict[str, str]]
 
 
+MAX_HISTORY_TURNS = 6
+
+
+def format_history(history: Sequence[str]) -> str:
+    """Render prior turns for a prompt, newest last, oldest dropped.
+
+    History is caller-supplied and therefore untrusted: it is labelled as a
+    transcript so the model treats it as context rather than instructions, and
+    bounded so a long conversation cannot crowd the retrieved sources out of
+    the context window.
+    """
+    turns = [turn.strip() for turn in history if turn and turn.strip()]
+    if not turns:
+        return ""
+    recent = turns[-MAX_HISTORY_TURNS:]
+    return "\n".join(f"- {turn}" for turn in recent)
+
+
 def expand_query(
     question: str,
     history: Sequence[str],
     settings: Settings,
     generator: Generator | None = None,
 ) -> list[str]:
-    del history
     if settings.generation_provider != "openai" or generator is None:
         return [question]
-    raw = generator.generate(load_prompt("expand_query", settings), question, max_tokens=220)
+    # Prior turns are what let the expander resolve a follow-up like "and for
+    # returns?" into a self-contained query.
+    transcript = format_history(history)
+    user = f"Earlier turns (untrusted transcript):\n{transcript}\n\nQuestion:\n{question}" if transcript else question
+    raw = generator.generate(load_prompt("expand_query", settings), user, max_tokens=220)
     try:
         parsed = json.loads(raw)
         if isinstance(parsed, list):
@@ -45,7 +66,6 @@ def generate_answer(
     generator: Generator,
     strict: bool = False,
 ) -> Answer:
-    del history
     system = load_prompt("answer_system_strict" if strict else "answer_system", settings)
     context_blocks: list[str] = []
     citations: list[dict[str, str]] = []
@@ -62,7 +82,13 @@ def generate_answer(
                 "url": chunk.url,
             }
         )
-    user = f"Question:\n{question}\n\nSources:\n" + "\n\n".join(context_blocks)
+    sections = []
+    transcript = format_history(history)
+    if transcript:
+        sections.append(f"Earlier turns (untrusted transcript, for context only):\n{transcript}")
+    sections.append(f"Question:\n{question}")
+    sections.append("Sources:\n" + "\n\n".join(context_blocks))
+    user = "\n\n".join(sections)
     answer_text = generator.generate(system=system, user=user, max_tokens=900)
     return Answer(text=answer_text, citations=citations)
 
